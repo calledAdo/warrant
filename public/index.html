@@ -122,7 +122,8 @@ fetch('/api/fixtures').then(r=>r.json()).then(f=>{
   const box=$('#examples'); box.textContent='';
   const seen=new Set();
   (f.scenarios||[]).forEach(s=>{
-    const email = s.scenario==='s1' ? 'billing@northwind.test' : 'ap@harbor.test';
+    const email = s.email || (s.scenario==='s1' ? 'billing@northwind.test' : s.scenario==='s2' ? 'ap@harbor.test' : null);
+    if(!email) return;
     if(seen.has(email)) return; seen.add(email);
     const b=document.createElement('button');
     b.type='button'; b.className='ghost'; b.textContent=email;

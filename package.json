@@ -16,7 +16,8 @@
     "verify:llm": "node verify/llm-provider.mjs",
     "lemma:policy": "node scripts/upload-policy.mjs",
     "verify:injection": "node verify/injection.mjs",
-    "graph": "node scripts/print-graph.mjs"
+    "graph": "node scripts/print-graph.mjs",
+    "fixtures:demo": "node fixtures/build.mjs --demo"
   },
   "dependencies": {
     "@langchain/core": "^1.2.11",

@@ -12,7 +12,7 @@
  */
 import 'dotenv/config';
 import Stripe from 'stripe';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const GH = { token: process.env.GITHUB_TOKEN, repo: process.env.GITHUB_REPO };
@@ -81,6 +81,7 @@ async function s1() {
     label: 'Northwind — billed twice',
     report: '"We were billed twice for September." — Northwind Trading Co.',
     customer_id: customer.id,
+    email: 'billing@northwind.test',
     expect: 'refund',
     charges: [a, b],
     incident: incident.number,
@@ -106,13 +107,46 @@ async function s2() {
     label: 'Harbor — billed twice',
     report: '"We were billed twice for September." — Harbor Logistics LLC',
     customer_id: customer.id,
+    email: 'ap@harbor.test',
     expect: 'refuse',
     charges: [a, b],
     incident: null,
   };
 }
 
-const BUILDERS = { s1, s2 };
+/**
+ * S6 — a genuine duplicate buried beneath 22 newer charges. Stripe test mode
+ * cannot backdate charges, so "older" means past the first 20 results: a flat
+ * "last 20 charges" fetch misses it; an agent that pages further back finds it.
+ */
+async function s6() {
+  head('S6 — Lakeside: duplicate buried under 22 newer charges');
+  const customer = await stripe.customers.create({
+    name: 'Lakeside Studio (SEEDED FIXTURE)',
+    email: 'finance@lakeside.test',
+    metadata: { ...FIXTURE_TAG, scenario: 's6' },
+  });
+  const a = await charge(customer.id, 12900, 'Annual seat pack — 10 seats');
+  const b = await charge(customer.id, 12900, 'Annual seat pack — 10 seats');
+  ok(`customer ${customer.id}`);
+  ok(`duplicate pair ${a.id} / ${b.id} — $129.00 each`);
+  const later = [];
+  for (let d = 1; d <= 22; d++) later.push(await charge(customer.id, 400 + d * 37, `Usage — metered API calls, batch ${d}`));
+  ok(`22 newer usage charges on top (${later[0].id} … ${later[later.length - 1].id})`);
+  return {
+    scenario: 's6',
+    label: 'Lakeside — charged twice, a while back',
+    report: 'We were charged twice for our annual seat pack. It was a while ago, before all the usage charges.',
+    customer_id: customer.id,
+    email: 'finance@lakeside.test',
+    expect: 'refund',
+    charges: [a, b],
+    buried_under: later.length,
+    incident: null,
+  };
+}
+
+const BUILDERS = { s1, s2, s6 };
 
 async function main() {
   if (!process.env.STRIPE_SECRET_KEY?.startsWith('sk_test_')) {
@@ -120,7 +154,8 @@ async function main() {
     process.exit(1);
   }
 
-  const which = arg('all', false) ? ['s1', 's2'] : [arg('scenario', 's1')];
+  const which = arg('demo', false) ? ['s1', 's2', 's6'] : arg('all', false) ? ['s1', 's2'] : [arg('scenario', 's1')];
+  // --all keeps demo setup fast; S6 takes ~25s and is built on demand (--scenario s6).
   const built = [];
   for (const s of which) {
     if (!BUILDERS[s]) { console.error(`unknown scenario: ${s}`); process.exit(1); }
@@ -128,7 +163,11 @@ async function main() {
   }
 
   mkdirSync('fixtures', { recursive: true });
-  writeFileSync('fixtures/current.json', JSON.stringify({ built_at: new Date().toISOString(), scenarios: built }, null, 2));
+  // Merge, so building one scenario never drops the others.
+  const prev = existsSync('fixtures/current.json') ? JSON.parse(readFileSync('fixtures/current.json', 'utf8')).scenarios || [] : [];
+  const merged = [...prev.filter((p) => !built.some((b) => b.scenario === p.scenario)), ...built]
+    .sort((a, b) => a.scenario.localeCompare(b.scenario));
+  writeFileSync('fixtures/current.json', JSON.stringify({ built_at: new Date().toISOString(), scenarios: merged }, null, 2));
 
   head('Ready');
   for (const b of built) {

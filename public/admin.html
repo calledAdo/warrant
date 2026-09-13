@@ -242,9 +242,9 @@ function renderShell(c){
 const W=128,H=56;
 const NODES=[
   {id:'complaint',x:20, y:102,kind:'',     k:'CUSTOMER', t:'Complaint'},
-  {id:'stripe',   x:190,y:40, kind:'',     k:'STRIPE',   t:'Charges',       step:'read_charges'},
-  {id:'github',   x:190,y:164,kind:'',     k:'GITHUB',   t:'Incidents',     step:'read_incidents'},
-  {id:'model',    x:360,y:102,kind:'think',k:'MODEL',    t:'Assess',        step:'assemble'},
+  {id:'stripe',   x:190,y:40, kind:'',     k:'TOOL · STRIPE', t:'Search charges', step:'read_charges'},
+  {id:'github',   x:190,y:164,kind:'',     k:'TOOL · GITHUB', t:'Search incidents', step:'read_incidents'},
+  {id:'model',    x:360,y:102,kind:'think',k:'AGENT',    t:'Investigate',   step:'assemble'},
   {id:'case',     x:530,y:40, kind:'',     k:'GITHUB',   t:'Case file',     step:'write_case'},
   {id:'notify',   x:530,y:164,kind:'',     k:'SLACK',    t:'Notify team',   step:'post_proposal'},
   {id:'gate',     x:700,y:102,kind:'gate', k:'HUMAN',    t:'Decision'},
@@ -288,9 +288,10 @@ function nodeStates(s){
     const last=x.attempts?.[x.attempts.length-1];
     st[id]={state:x.state==='refused'?'done':x.state, sub:sub(x), skipped:!!last?.skipped}; };
 
-  map('stripe','read_charges',()=>{ const n=(s.finding?.evidence||[]).filter(e=>e.source==='stripe').length; return n?n+' charges':'reading'; });
-  map('github','read_incidents',()=>{ const i=s.incidents||[]; return i.length?'#'+i[0].number:'none found'; });
-  map('model','assemble',(x)=> x.state==='active'?'thinking…' : s.finding?.verdict==='duplicate'?'duplicate':'not duplicate');
+  const nS=(s.searches||[]).filter(x=>x.tool==='search_charges').length, nI=(s.searches||[]).filter(x=>x.tool==='search_incidents').length;
+  map('stripe','read_charges',()=> `${nS} search${nS===1?'':'es'} · ${s.chargesSeen||0} seen`);
+  map('github','read_incidents',()=> `${nI} search${nI===1?'':'es'} · ${(s.incidents||[]).length} found`);
+  map('model','assemble',(x)=> x.state==='active'?`turn ${s.llm?.turns||1}…` : s.finding?.verdict==='duplicate'?'duplicate':'not duplicate');
   map('case','write_case',()=> s.caseNumber?'#'+s.caseNumber:'writing');
   map('notify','post_proposal',()=> s.finding?.verdict==='duplicate'?'proposal':'refusal');
 
@@ -376,7 +377,7 @@ function update(){
   const s=snap; if(!s) return;
   paintGraph();
   $('#headpill').innerHTML=pill(s.status);
-  const sig=[s.status,!!s.finding,s.caseNumber,(s.pending||[]).length,s.engine?.checkpoints,
+  const sig=[s.status,!!s.finding,s.caseNumber,(s.pending||[]).length,s.engine?.checkpoints,(s.searches||[]).length,
     (s.steps||[]).map(x=>x.state).join('')].join('|');
   if(sig===lastSig){ tickExpiry(s); return; }
   lastSig=sig;
@@ -465,13 +466,21 @@ function renderReasoning(s){
   const verdict=f.verdict==='duplicate'?'<span class="pill go">Duplicate</span>':'<span class="pill no">Not a duplicate</span>';
   const g=s.guard?.overridden
     ? `<p class="reason" style="color:var(--warn)"><strong style="color:var(--warn)">Code check overrode the model.</strong> It proposed a refund, but ${esc(s.guard.reason)}.</p>` : '';
-  box.innerHTML=`<p style="margin:0 0 12px">${verdict}</p>${g}
+  const steps=(s.searches||[]).map((x,i)=>{
+    const a=x.args||{}; const bits=[];
+    if(a.cursor) bits.push('older page'); if(a.created_after) bits.push('from '+String(a.created_after).slice(0,10));
+    if(a.created_before) bits.push('before '+String(a.created_before).slice(0,10)); if(a.since) bits.push('since '+String(a.since).slice(0,10));
+    if(a.keywords) bits.push('“'+a.keywords+'”');
+    return `<li><span class="mono" style="color:var(--ink2)">${esc(x.tool)}</span>${bits.length?' <span class="muted">('+esc(bits.join(', '))+')</span>':''} <span class="muted">→ ${esc(x.summary)}</span></li>`;
+  }).join('');
+  const trail = steps ? `<div style="margin:0 0 14px"><p class="eyebrow" style="margin:0 0 6px">What the agent looked up</p><ol style="margin:0;padding-left:18px;font-size:13px;line-height:1.7">${steps}</ol></div>` : '';
+  box.innerHTML=`<p style="margin:0 0 12px">${verdict}</p>${g}${trail}
     <p class="reason">${esc(shortenIds(f.grounds))}</p>
     ${f.missing_evidence?`<p class="reason"><strong>Missing:</strong> ${esc(shortenIds(f.missing_evidence))}</p>`:''}
     ${f.uncertainty&&f.uncertainty!=='none'?`<p class="reason"><strong>Uncertain:</strong> ${esc(shortenIds(f.uncertainty))}</p>`:''}
     ${l?`<div class="telemetry">
       <span class="${l.rules?'fallback':''}"><b>${esc(l.rules?'Rules fallback':l.model)}</b></span>
-      <span><b>${(l.ms/1000).toFixed(1)}s</b> reasoning</span>
+      <span><b>${l.turns||1}</b> turns · <b>${(l.ms/1000).toFixed(1)}s</b></span>
       <span><b>${l.inTok}</b> in · <b>${l.outTok}</b> out tokens</span></div>`:''}`;
 }
 /** Long provider ids inside model prose become short tokens too. */
