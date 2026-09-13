@@ -4,7 +4,7 @@
 
 Warrant investigates customer reports of being charged twice. Using read-only tools, it searches the customer's billing history in **Stripe**, paging back as far as it needs, and searches **GitHub** for an engineering incident that could explain a double charge. It then writes up a cited case, and then does one of two things. It either proposes a single, exact refund and waits for a person on the billing team to approve it, or it **refuses** and states exactly what evidence is missing. Every decision is recorded in GitHub and Slack, and every run is traced in **Lemma**.
 
-**Demo video (2 min):** _add link here before submitting_
+**Demo video (2 min):** https://youtu.be/T2u0wYKTFAw
 **Repository:** https://github.com/calledAdo/warrant
 
 ---
@@ -35,15 +35,21 @@ So a genuine duplicate that isn't refunded quickly can end up costing more than 
 
 ## What Warrant does
 
-1. **A customer reports a problem.** On the customer page they enter their account email and what happened. Warrant finds the account in Stripe from the email.
-2. **The agent investigates.** The model decides what to look up. It searches the customer's charges page by page (so a duplicate from months ago, beneath many newer charges, is still found) and searches GitHub incidents around the dates of the charges it's examining. The customer is locked in by code and every search is read-only and capped. It then weighs the evidence against a written policy and decides whether there is a duplicate and, if so, which charge to refund (always the later one).
-3. **Code checks the model.** Before anything is proposed, deterministic code re-checks the duplicate rule against the Stripe records. If the model says "duplicate" and the data doesn't back it up, the finding becomes a refusal.
-4. **It writes the case either way.** An investigation issue in GitHub records the complaint, the finding, an evidence table and the model's stated uncertainty.
-5. **It refuses or proposes.**
+1. **A payment starts the demo.** At `/simulation`, the customer clicks Pay. The backend creates two Stripe test-mode PaymentIntents to reproduce a retry bug, and the page renders the real returned charge IDs. A small customer-care action, **Multiple charge? Ask for a refund**, is available throughout the page.
+2. **A customer reports a problem.** The handoff opens the customer page with the account email and duplicate-charge report prefilled. Warrant finds the account in Stripe from the email.
+3. **The agent investigates.** The model decides what to look up. It searches the customer's charges page by page (so a duplicate from months ago, beneath many newer charges, is still found) and searches GitHub incidents around the dates of the charges it's examining. The customer is locked in by code and every search is read-only and capped. It then weighs the evidence against a written policy and decides whether there is a duplicate and, if so, which charge to refund (always the later one).
+4. **Code checks the model.** Before anything is proposed, deterministic code re-checks the duplicate rule against the Stripe records. If the model says "duplicate" and the data doesn't back it up, the finding becomes a refusal. If three or more matching charges form one duplicate group, Warrant creates a manual-review outcome with every charge ID and no refund plan; refunding only one would leave the case partially corrected.
+5. **It writes the case either way.** An investigation issue in GitHub records the complaint, the finding, an evidence table and the model's stated uncertainty.
+6. **It refuses or proposes.**
    - **No duplicate:** it posts to Slack that no action was taken and why, and the customer is told nothing was changed. No money moves and nobody needs to approve anything.
+   - **Multiple possible duplicates:** it records the likely legitimate charge and every excess charge, posts a manual-review notice, and creates no executable plan.
    - **Duplicate:** it posts the proposed refund to Slack and **stops**, waiting for a human decision.
-6. **A person decides.** On the billing team page they see the investigation graph, the evidence, the model's reasoning, the operation journal and links to Lemma traces, then approve or decline that exact refund.
-7. **It executes and verifies.** On approval it refunds the charge, reads Stripe back to confirm the refunded amount, comments on the GitHub case and edits the original Slack message to "Refund applied and verified". On decline it records who declined and why in GitHub and Slack. The customer's page updates either way.
+7. **A person decides.** On the billing team page they see the investigation graph, the evidence, the model's reasoning, the operation journal and links to Lemma traces, then approve or decline that exact refund.
+8. **It executes and verifies.** On approval it refunds the charge, reads Stripe back to confirm the refunded amount, comments on the GitHub case and edits the original Slack message to "Refund applied and verified". On decline it records who declined and why in GitHub and Slack. The customer's page updates either way.
+
+### The recorded demo flow
+
+The video shows the complete S1 path: a payment is submitted, a retry produces two real Stripe test charges, the customer opens a refund request, and Warrant gathers evidence before asking for approval. The billing team sees the GitHub incident and cited charge evidence, approves the exact later-charge refund, and Warrant verifies the result against Stripe before closing the loop in GitHub and Slack. Lemma provides the trace of the investigation, approval check, refund and verification.
 
 The two pages:
 
@@ -56,7 +62,7 @@ The two pages:
 
 | App | What Warrant reads | What Warrant writes | Why |
 | --- | --- | --- | --- |
-| **Stripe** (test mode) | Customer by email; the agent pages through that customer's charges (10 per search, up to 365 days back) | One full refund, then reads the charge back to verify | Where the money is, and the only source of truth for whether a duplicate exists |
+| **Stripe** (test mode) | Creates the S1 PaymentIntents in `/simulation`; finds customers by email; the agent pages through that customer's charges (10 per search, up to 365 days back) | One full refund, then reads the charge back to verify | Where the money is, and the only source of truth for whether a duplicate exists |
 | **GitHub** | The agent searches issues labelled `incident` by date window and keywords | An investigation issue per complaint; comments recording the refund or the decline | Links billing complaints to engineering incidents and keeps a permanent audit trail |
 | **Slack** | — | Proposal or refusal message; the same message edited in place when approved or declined | Brings the decision to the team without anyone watching a dashboard |
 
@@ -64,8 +70,8 @@ Supporting tools:
 
 | Tool | Role |
 | --- | --- |
-| **LangGraph** (`@langchain/langgraph`) | Runs the workflow as a fixed, checkpointed state graph with a real human-in-the-loop pause (`interrupt()`) |
-| **Lemma** | One trace per graph segment (investigate / execute / decline / replay), linked by thread; our policy uploaded as agent context so runs are judged against our own rules |
+| **LangGraph** (`@langchain/langgraph`) | Runs the workflow as a fixed, SQLite-checkpointed state graph; `interrupt()` creates the durable human-review pause and checkpoint replay resumes from the correct node |
+| **Lemma** | Receives one trace per graph segment, linked by thread; evaluates traces against the uploaded Warrant policy, exposes issue and trace-occurrence APIs to the backend, and can hold proposals when a person applies `warrant-hold` |
 | **Arga** | Slack digital twin with a real rate limit (HTTP 429, `Retry-After`) used to test what happens when Slack fails after the money has moved |
 | **OpenAI-compatible model** (`gpt-5.6-luna`) | The agent model, with tool calling, through an OpenAI-compatible API. Any provider with tool calling works; Groq's `gpt-oss-120b` was also tested (see findings) |
 
@@ -120,12 +126,14 @@ Run `npm run graph` to print the current graph as Mermaid.
 
 - **Human approval tied to the exact plan.** The plan ID is a hash of the customer, charge, duplicate, amount, currency and action. Approval is recorded against that hash and expires after 15 minutes; if anything material changes, the approval no longer matches.
 - **The model's tools are scoped and capped in code.** No tool accepts a customer ID; searches are read-only, limited to 8 per investigation, 10 charges per page and 365 days back. Only what the tools returned can be cited as evidence.
-- **The duplicate rule is enforced in code.** Both charges must be on this account and have succeeded, not already refunded, the same amount and currency, within 24 hours, with the later one refunded, and backed by an incident or identical descriptions. Otherwise the finding becomes a refusal, whatever the model said.
+- **The duplicate rule is enforced in code.** Matching charges must be on this account, succeeded, unrefunded, and have the same amount and currency. The normal window is 24 hours with a billing-relevant incident or identical non-empty descriptions. A window up to 30 days additionally requires a shared strong invoice/order/checkout identifier and an incident that names the key and whose explicit start/end covers the charges. Three or more matches produce one approval-bound batch that keeps the earliest charge and refunds every later charge, capped at 10 refunds and $1,000 total. A batch is withheld while older charge pages remain unexplored.
 - **The complaint is treated as untrusted input.** It is wrapped in delimiters, stripped of control characters, capped at 2,000 characters, and the policy tells the model to ignore instructions inside it.
-- **Operation journal.** Every external write (refund, GitHub comment, Slack update) records its intent before the call and its result after. A write that already succeeded is never repeated. The journal key is also Stripe's idempotency key.
+- **Operation journal.** Every external write records intent before the call and its result after. Initial GitHub and Slack writes and case follow-ups are scoped to a run; refunds are scoped to the Stripe charge and reuse the journal key as Stripe's idempotency key. An ambiguous provider result is held for operator reconciliation rather than retried blindly.
 - **Full refunds only, verified by amount.** During setup we found that Stripe **stacks partial refunds** made with different idempotency keys, and that the charge's `refunded` flag stays `false` after an over-refund. So Warrant only issues full refunds and checks `amount_refunded`, never the flag.
-- **Partial failure is reported, never rolled back.** If Slack fails after the refund succeeded, the run is marked *partial* with the failed step named, and resuming continues from LangGraph's checkpoint.
+- **Partial failure is reported, never rolled back.** A post-refund notification failure is `notification_partial`; an unfinished batch is `financial_partial` with confirmed progress and remains under review. Resuming continues from LangGraph's checkpoint without repeating successful refunds.
 - **Model outage fallback.** If the model provider is unreachable, a deterministic rules engine implementing the same policy takes over, and the admin page labels the result "Rules fallback".
+- **Durable recovery.** Complaints, runs, approvals, journal entries and LangGraph checkpoints share SQLite storage. A restart reconstructs paused approvals, holds, partial outcomes and completed customer status without executing provider writes during startup.
+- **Monitoring hold.** Before posting a proposal, Warrant refreshes active Lemma issues. A human-applied `warrant-hold` tag pauses the graph; a failed refresh also waits rather than assuming the hold has cleared.
 
 ## How we tested reliability
 
@@ -152,8 +160,9 @@ What these tests established beyond pass/fail:
 
 **Known limitations**
 
-- LangGraph state is held in memory (`MemorySaver`): restarting the server loses runs that are paused for approval. The operation journal is stored in SQLite and survives restarts.
-- One duplicate pair per complaint; approval happens on the admin page, not with Slack buttons.
+- Recovery is single-process SQLite storage. Running multiple server instances against the same database is outside the current deployment model.
+- Ambiguous provider writes require inspection and explicit reconciliation with `npm run journal:reconcile`; Warrant does not infer whether a lost response was applied.
+- One single or batch correction per plan. A batch binds every charge, amount, currency, the kept charge, and total to the full SHA-256 approval hash; every refund has its own journal/idempotency key and sends Stripe the exact approved amount. Financially incomplete batches remain under review and can receive fresh approval after expiry; notification-only failures do not misstate the financial result. Approval happens on the admin page, not with Slack buttons.
 - An investigation that pages back takes longer: S6 takes about 20–25 s over 5 model turns.
 - Stripe test mode can't backdate charges, so S6 tests "older" as beyond the 20 most recent charges rather than months in the past.
 - In one full test run S1 was refused and the result could not be reproduced (it then passed 5/5 on its own and in every later full run). The test now prints the model, the code-check result and the stated reason whenever this happens.
@@ -197,24 +206,27 @@ npm run verify:llm <base_url> <key> <model>   # check the model refuses correctl
 npm run lemma:policy        # upload the policy to Lemma as agent context
 npm run fixtures:demo       # seed the three test customers (~30 s; run again between demo takes)
 npm start                   # http://localhost:3000 (customer) and http://localhost:3000/admin (billing team)
+npm test                    # offline backend policy, journal, Lemma and restart tests
+npm run lemma:issues        # read current active Lemma issues
+npm run journal:reconcile -- <op-key>  # inspect an ambiguous journal entry
 ```
 
-Try it: on the customer page, use `billing@northwind.test` (a genuine duplicate: approve it on `/admin`), `ap@harbor.test` (not a duplicate: refused automatically) and `finance@lakeside.test` (a duplicate buried under 22 newer charges: watch the agent page back to find it).
+Try the recorded flow at `/simulation`: click Pay to create two Stripe test charges, then use the persistent customer-care handoff to open the prefilled refund request. For the seeded investigation cases, use `billing@northwind.test` (a genuine duplicate: approve it on `/admin`), `ap@harbor.test` (not a duplicate: refused automatically) and `finance@lakeside.test` (a duplicate buried under 22 newer charges: watch the agent page back to find it).
 
 ### Run the reliability tests
 
 ```bash
-npm run fixtures && node verify/e2e.mjs          # S1–S3, S6 (and S4 when SLACK_API_URL is set)
+npm run fixtures && node verify/e2e.mjs          # S1–S3 and S6; S4 is always opt-in
 npm run fixtures && npm run verify:injection     # S5 prompt injection
 
 # S4 without an Arga account, using the local Slack twin stand-in
 MOCK_SLACK_WINDOW=6 node verify/mock-slack.mjs &
-npm run fixtures && SLACK_API_URL=http://localhost:4020 SLACK_CHANNEL=billing-approvals node verify/e2e.mjs
+npm run fixtures && SLACK_API_URL=http://localhost:4020 SLACK_CHANNEL=billing-approvals node verify/e2e.mjs -- --s4
 
 # S4 against Arga's Slack twin
 arga twin-runs create --twins slack --ttl 10 --wait --json \
   --scenario-prompt "A Slack workspace with a channel named billing-approvals. Enable rate limiting with a strict limit on the chat.update method: at most 1 request per 20 seconds."
-# then set SLACK_API_URL and SLACK_BOT_TOKEN from the output and run verify/e2e.mjs
+# then set SLACK_API_URL and SLACK_BOT_TOKEN from the output and run verify/e2e.mjs --s4
 ```
 
 ## Project layout
@@ -228,11 +240,14 @@ src/
   agent-rules.js    deterministic fallback implementing the same policy
   policy.md         the agent's rules (also uploaded to Lemma)
   journal.js        operation journal (SQLite)
+  checkpointer.js   durable LangGraph checkpoints (SQLite)
+  lemma-issues.js   issue polling, per-trace occurrences and proposal holds
   plan.js           plan hashing and approval expiry
   complaints.js     complaints and the customer-facing view
+  simulation.js      Stripe test-mode payment cold open for the S1 demo
   server.js         HTTP API and pages
   adapters/         stripe.js, github.js, slack.js
-public/             index.html (customer), admin.html (billing team), app.css
+public/             simulation.html (payment cold open), index.html (customer), admin.html (billing team), app.css
 verify/             credential checks, scenario tests, injection test, Slack twin stand-in
 scripts/            policy upload to Lemma, graph printer
 fixtures/           seeds the test customers and incident

@@ -197,6 +197,11 @@ $('#again').onclick=()=>{ location.href='/'; };
 
 const ref=new URLSearchParams(location.search).get('ref');
 if(ref){ id=ref; showTracking(); }
+const params=new URLSearchParams(location.search);
+if(!ref){
+  if(params.get('email')) $('#email').value=params.get('email');
+  if(params.get('body')) $('#body').value=params.get('body');
+}
 </script>
 </body>
 </html>

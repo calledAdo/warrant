@@ -1,11 +1,12 @@
 import { readFileSync } from 'node:fs';
 import { completeJSON } from './llm.js';
+import { enforceDuplicateRule } from './duplicate-policy.js';
+import { outcomeFor } from './outcomes.js';
 import { assembleCaseByRules } from './agent-rules.js';
 
 const POLICY = readFileSync(new URL('./policy.md', import.meta.url), 'utf8');
 
 export const REPORT_MAX = 2000;
-const DAY = 24 * 60 * 60;
 
 /**
  * Customer text is untrusted input. Strip control characters, neutralise
@@ -25,42 +26,7 @@ export function sanitizeReport(text) {
  * records themselves show a duplicate. A failing check downgrades the finding
  * to a refusal and records why.
  */
-export function enforceDuplicateRule(finding, charges, incidents) {
-  if (finding.verdict !== 'duplicate') return { finding, overridden: false };
-  const byId = new Map(charges.map((c) => [c.id, c]));
-  const r = byId.get(finding.charge_to_refund);
-  const k = byId.get(finding.duplicate_of);
-
-  const fail = (reason) => ({
-    overridden: true,
-    reason,
-    finding: {
-      ...finding,
-      verdict: 'insufficient_evidence',
-      charge_to_refund: null,
-      duplicate_of: null,
-      missing_evidence: `The records do not support a duplicate: ${reason}.`,
-      uncertainty: `The model proposed a refund, but a code check rejected it (${reason}).`,
-      model_verdict: 'duplicate',
-    },
-  });
-
-  if (!r || !k) return fail('a named charge is not on this account');
-  if (r.id === k.id) return fail('the refund and the kept charge are the same charge');
-  if (r.status !== 'succeeded' || k.status !== 'succeeded') return fail('both charges must have succeeded');
-  if (r.refunded || r.amount_refunded > 0) return fail('the charge to refund has already been refunded');
-  if (r.amount !== k.amount) return fail(`the amounts differ (${r.amount} vs ${k.amount})`);
-  if (r.currency !== k.currency) return fail('the currencies differ');
-  if (Math.abs(r.created - k.created) > DAY) return fail('the charges are more than 24 hours apart');
-  if (r.created < k.created) return fail('the proposed refund is the earlier charge, not the later one');
-
-  const sameDescription = (r.description || '') === (k.description || '');
-  const incident = incidents.some((i) => Math.abs(Date.parse(i.created_iso) / 1000 - r.created) <= DAY);
-  if (!sameDescription && !incident) {
-    return fail('the descriptions differ and no incident covers that window');
-  }
-  return { finding, overridden: false };
-}
+export { enforceDuplicateRule } from './duplicate-policy.js';
 
 const SCHEMA = `Respond with a single JSON object:
 {
@@ -127,7 +93,7 @@ export async function assembleCase({ report, customer, charges, incidents }) {
 }
 
 function rulesResult(charges, incidents, fellBack = false) {
-  const parsed = assembleCaseByRules({ charges, incidents });
+  const parsed = enforceDuplicateRule(assembleCaseByRules({ charges, incidents }), charges, incidents).finding;
   return {
     parsed,
     raw: JSON.stringify(parsed),
@@ -145,9 +111,11 @@ export function caseBody({ report, customer, charges, incidents, finding }) {
   const inc = incidents.map((i) => `| GitHub | #${i.number} | ${i.title} |`).join('\n');
 
   const verdictLine =
-    finding.verdict === 'duplicate'
+    finding.outcome === 'multiple_duplicates'
+      ? `**Multiple duplicates confirmed.** Keep \`${finding.legitimate_charge}\`; proposed batch: ${finding.duplicate_charges.map(id => `full refund of \`${id}\``).join(', ')}.`
+      : finding.verdict === 'duplicate'
       ? `**Duplicate confirmed.** Proposed correction: full refund of \`${finding.charge_to_refund}\` (duplicate of \`${finding.duplicate_of}\`).`
-      : `**Insufficient evidence. No correction proposed.**`;
+      : `**${outcomeFor(finding).label}. No correction proposed.**`;
 
   return [
     `## Report`,

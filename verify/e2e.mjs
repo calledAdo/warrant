@@ -3,6 +3,7 @@
  * confirm the whole pipeline still works after a change.
  *
  *   node verify/e2e.mjs
+ *   node verify/e2e.mjs --scenario=s1
  */
 import 'dotenv/config';
 import { readFileSync } from 'node:fs';
@@ -16,6 +17,12 @@ const pass = (m) => console.log(`  \x1b[32mPASS\x1b[0m  ${m}`);
 const fail = (m) => { console.log(`  \x1b[31mFAIL\x1b[0m  ${m}`); failures.push(m); };
 const info = (m) => console.log(`        ${m}`);
 const failures = [];
+const scenarioArg = process.argv.find((arg) => arg.startsWith('--scenario='));
+const scenario = scenarioArg?.slice('--scenario='.length);
+const supportedScenarios = new Set(['s1', 's2', 's3', 's4', 's6']);
+if (scenario && !supportedScenarios.has(scenario)) {
+  throw new Error(`unknown scenario: ${scenario}`);
+}
 
 const fx = JSON.parse(readFileSync('fixtures/current.json', 'utf8')).scenarios;
 const get = (s) => fx.find((f) => f.scenario === s);
@@ -99,6 +106,7 @@ async function s3(s1run) {
 async function s4() {
   head('S4 — Slack fails after the refund, then resume');
   if (!process.env.SLACK_API_URL) {
+    fail('S4 explicitly requested but SLACK_API_URL is not set');
     info('SLACK_API_URL not set — provision an Arga twin to run S4:');
     info('  arga twin-runs create --twins slack --ttl 10 --scenario-prompt "..." --wait --json');
     return;
@@ -123,7 +131,7 @@ async function s4() {
   info(steps(run));
 
   const pendingSlack = run.pending.some((p) => p.step === 'update_slack');
-  pendingSlack ? pass('update_slack pending, refund preserved') : info(`pending: ${JSON.stringify(run.pending)}`);
+  pendingSlack ? pass('update_slack pending, refund preserved') : fail(`S4 did not exercise the expected failure; pending: ${JSON.stringify(run.pending)}`);
 
   const ch = await stripe.getCharge(run.plan.charge_id);
   ch.amount_refunded === run.plan.amount ? pass('refund NOT rolled back') : fail('refund was lost');
@@ -164,11 +172,13 @@ console.log(`\n  mode: ${process.env.LLM_MODE === 'rules' || !process.env.OPENAI
 console.log(`  slack: ${process.env.SLACK_API_URL ? 'TWIN' : 'real'}`);
 reset();
 
-const run1 = await s1();
-await s2();
-await s3(run1);
-await s4();
-if (!process.argv.includes('--skip-s6')) await s6();
+let run1 = null;
+if (!scenario || ['s1', 's3'].includes(scenario)) run1 = await s1();
+if (!scenario || scenario === 's2') await s2();
+if (!scenario || scenario === 's3') await s3(run1);
+if (scenario === 's4' || (!scenario && process.argv.includes('--s4'))) await s4();
+else if (!scenario) info('S4 skipped; explicit --s4 required.');
+if (scenario === 's6' || (!scenario && !process.argv.includes('--skip-s6'))) await s6();
 
 console.log(`\n\x1b[1m  ${failures.length ? '\x1b[31m' + failures.length + ' FAILURE(S)' : '\x1b[32mALL SCENARIOS PASSED'}\x1b[0m\n`);
 process.exit(failures.length ? 1 : 0);

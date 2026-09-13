@@ -1,3 +1,5 @@
+import { outcomeFor } from '../outcomes.js';
+import { sqliteProviderEnabled, createDemoNotification, updateDemoNotification } from '../demo-store.js';
 /**
  * Raw fetch rather than the SDK, so we can see HTTP status, Retry-After and
  * twin stub markers. Slack returns HTTP 200 with ok:false — every call must
@@ -15,6 +17,7 @@ export class SlackError extends Error {
     this.status = status;
     this.code = code;
     this.retryAfter = retryAfter;
+    this.definitiveRejection = status === 429 || (status >= 400 && status < 500 && status !== 408) || (status === 200 && Boolean(code) && !['unknown','internal_error','fatal_error','request_timeout'].includes(code));
     this.retryable = status === 429 || code === 'ratelimited' || code === 'rate_limited';
   }
 }
@@ -54,18 +57,21 @@ const money = (cents, cur) =>
     .format(cents / 100);
 
 export async function postProposal(plan, approveUrl) {
+  if (sqliteProviderEnabled()) return createDemoNotification('proposal', { plan, approveUrl });
+  const refunds = plan.refunds || [{ charge_id: plan.charge_id, amount: plan.amount, currency: plan.currency, duplicate_of: plan.duplicate_of }];
+  const total = plan.total_amount ?? plan.amount;
   const r = await call('chat.postMessage', {
     channel: CHANNEL(),
-    text: `Refund proposed: ${money(plan.amount, plan.currency)} — ${plan.customer_name}`,
+    text: `${refunds.length > 1 ? 'Batch refund' : 'Refund'} proposed: ${money(total, refunds[0].currency)} — ${plan.customer_name}`,
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Refund proposed — awaiting approval' } },
       {
         type: 'section',
         fields: [
           { type: 'mrkdwn', text: `*Customer*\n${plan.customer_name}` },
-          { type: 'mrkdwn', text: `*Amount*\n${money(plan.amount, plan.currency)}` },
-          { type: 'mrkdwn', text: `*Refund*\n\`${plan.charge_id}\`` },
-          { type: 'mrkdwn', text: `*Duplicate of*\n\`${plan.duplicate_of}\`` },
+          { type: 'mrkdwn', text: `*Total*\n${money(total, refunds[0].currency)}` },
+          { type: 'mrkdwn', text: `*Refunds*\n${refunds.map(x => `\`${x.charge_id}\` (${money(x.amount, x.currency)})`).join('\n')}` },
+          { type: 'mrkdwn', text: `*Keep*\n\`${refunds[0].duplicate_of}\`` },
         ],
       },
       { type: 'section', text: { type: 'mrkdwn', text: `*Grounds*\n${plan.grounds}` } },
@@ -78,12 +84,13 @@ export async function postProposal(plan, approveUrl) {
   return { ts: r.ts, channel: r.channel };
 }
 
-export async function postRefusal(caseNumber, customerName, missing, caseUrl) {
+export async function postRefusal(caseNumber, customerName, missing, caseUrl, finding) {
+  if (sqliteProviderEnabled()) return createDemoNotification('refusal', { caseNumber, customerName, missing, caseUrl, finding });
   const r = await call('chat.postMessage', {
     channel: CHANNEL(),
     text: `No action taken — ${customerName}`,
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: 'No refund proposed — evidence insufficient' } },
+      { type: 'header', text: { type: 'plain_text', text: `No refund proposed — ${outcomeFor(finding).label}` } },
       { type: 'section', text: { type: 'mrkdwn', text: `*Customer*\n${customerName}` } },
       { type: 'section', text: { type: 'mrkdwn', text: `*Missing evidence*\n${missing}` } },
       { type: 'context', elements: [{ type: 'mrkdwn', text: `Case #${caseNumber} · ${caseUrl}` }] },
@@ -92,18 +99,22 @@ export async function postRefusal(caseNumber, customerName, missing, caseUrl) {
   return { ts: r.ts, channel: r.channel };
 }
 
-export async function updateApplied(channel, ts, plan, refund, approver) {
+export async function updateApplied(channel, ts, plan, refundInput, approver) {
+  if (sqliteProviderEnabled()) return updateDemoNotification(channel, ts, 'applied', { plan, refundInput, approver });
+  const refunds = Array.isArray(refundInput) ? refundInput : [refundInput];
+  const total = plan.total_amount ?? plan.amount;
+  const currency = plan.refunds?.[0]?.currency ?? plan.currency;
   const r = await call('chat.update', {
     channel, ts,
-    text: `Refund applied: ${money(plan.amount, plan.currency)} — ${plan.customer_name}`,
+    text: `${refunds.length > 1 ? 'Batch refund' : 'Refund'} applied: ${money(total, currency)} — ${plan.customer_name}`,
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Refund applied and verified' } },
       {
         type: 'section',
         fields: [
           { type: 'mrkdwn', text: `*Customer*\n${plan.customer_name}` },
-          { type: 'mrkdwn', text: `*Refunded*\n${money(refund.amount, plan.currency)}` },
-          { type: 'mrkdwn', text: `*Refund*\n\`${refund.id}\`` },
+          { type: 'mrkdwn', text: `*Refunded*\n${money(total, currency)}` },
+          { type: 'mrkdwn', text: `*Refunds*\n${refunds.map(r => `\`${r.id}\``).join('\n')}` },
           { type: 'mrkdwn', text: `*Approved by*\n${approver}` },
         ],
       },
@@ -114,16 +125,19 @@ export async function updateApplied(channel, ts, plan, refund, approver) {
 }
 
 export async function updateDeclined(channel, ts, plan, approver, reason) {
+  if (sqliteProviderEnabled()) return updateDemoNotification(channel, ts, 'declined', { plan, approver, reason });
+  const amount = plan.total_amount ?? plan.amount;
+  const currency = plan.refunds?.[0]?.currency ?? plan.currency;
   const r = await call('chat.update', {
     channel, ts,
-    text: `Refund declined: ${money(plan.amount, plan.currency)} — ${plan.customer_name}`,
+    text: `Refund declined: ${money(amount, currency)} — ${plan.customer_name}`,
     blocks: [
       { type: 'header', text: { type: 'plain_text', text: 'Refund declined — no money moved' } },
       {
         type: 'section',
         fields: [
           { type: 'mrkdwn', text: `*Customer*\n${plan.customer_name}` },
-          { type: 'mrkdwn', text: `*Proposed*\n${money(plan.amount, plan.currency)}` },
+          { type: 'mrkdwn', text: `*Proposed*\n${money(amount, currency)}` },
           { type: 'mrkdwn', text: `*Declined by*\n${approver}` },
           { type: 'mrkdwn', text: `*Reason*\n${reason || '_none given_'}` },
         ],

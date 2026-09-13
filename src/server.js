@@ -1,14 +1,24 @@
 import 'dotenv/config';
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
-import { createRun, investigate, approve, decline, execute, resume, runs, journalFor } from './run.js';
+import { createRun, investigate, approve, decline, execute, resume, runs, journalFor, recoverRuns } from './run.js';
+import { resetRuns } from './runstate.js';
+import { listIssues, issuesForRun } from './lemma-issues.js';
 import { secondsLeft } from './plan.js';
 import * as stripe from './adapters/stripe.js';
 import { reset as resetJournal } from './journal.js';
 import { dashboardUrlFor, tracingEnabled, currentRelease } from './trace.js';
 import * as complaints from './complaints.js';
+import { createSimulatedPayment } from './simulation.js';
+import { ensureS1Demo, prepareS1Demo, getS1Demo } from './demo.js';
+import { sqliteProviderEnabled } from './demo-store.js';
+import {
+  submitRefundRequest, investigateRefundRequest, approveRefundRequest,
+  executeApprovedRefund, declineRefundRequest,
+} from './application.js';
 
 const PORT = process.env.PORT || 3000;
+const integratedS1Demo = process.env.WARRANT_DEMO === 's1' && !sqliteProviderEnabled();
 const page = (f) => readFileSync(new URL(`../public/${f}`, import.meta.url), 'utf8');
 
 const json = (res, code, body) => {
@@ -16,11 +26,20 @@ const json = (res, code, body) => {
   res.end(JSON.stringify(body));
 };
 
+const MAX_BODY_BYTES = 16 * 1024;
 const readBody = (req) =>
-  new Promise((resolve) => {
+  new Promise((resolve, reject) => {
     let d = '';
-    req.on('data', (c) => (d += c));
-    req.on('end', () => { try { resolve(JSON.parse(d || '{}')); } catch { resolve({}); } });
+    let tooLarge = false;
+    req.on('data', (c) => {
+      if (tooLarge) return;
+      d += c;
+      if (Buffer.byteLength(d) > MAX_BODY_BYTES) {
+        tooLarge = true;
+        reject(Object.assign(new Error('request body too large'), { statusCode: 413 }));
+      }
+    });
+    req.on('end', () => { if (tooLarge) return; try { resolve(JSON.parse(d || '{}')); } catch { resolve({}); } });
   });
 
 const server = createServer(async (req, res) => {
@@ -31,6 +50,10 @@ const server = createServer(async (req, res) => {
     if (p === '/' || p === '/index.html') {
       res.writeHead(200, { 'Content-Type': 'text/html' });
       return res.end(page('index.html'));
+    }
+    if (p === '/simulation' || p === '/simulation.html') {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      return res.end(page('simulation.html'));
     }
     if (p === '/admin' || p === '/admin.html') {
       res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -44,24 +67,14 @@ const server = createServer(async (req, res) => {
     // ---- complaints ----------------------------------------------------
     if (p === '/api/complaints' && req.method === 'POST') {
       const { email, body } = await readBody(req);
-      if (!email || !body) return json(res, 400, { error: 'Email and description are required.' });
-      if (String(body).length > 2000) {
-        return json(res, 400, { error: 'Please keep the description under 2,000 characters.' });
-      }
-      const customer = await stripe.findCustomerByEmail(email).catch(() => null);
-      if (!customer) {
-        return json(res, 404, {
-          error: 'We could not find an account for that email address. Check the address and try again.',
-        });
-      }
-      const c = complaints.create({ email, body, customer });
-      const run = createRun(body, customer.id);
-      complaints.attachRun(c.id, run.id);
-      json(res, 200, { id: c.id });
-      investigate(run).catch((e) => {
-        run.status = 'error'; run.error = e.message; run.emit('update', run.snapshot());
-      });
+      const { complaint, run } = await submitRefundRequest({ email, body });
+      json(res, 200, { id: complaint.id });
+      investigateRefundRequest(run).catch(() => {});
       return;
+    }
+
+    if (p === '/api/simulation/payment' && req.method === 'POST') {
+      return json(res, 200, await createSimulatedPayment());
     }
 
     if (p === '/api/complaints' && req.method === 'GET') {
@@ -70,8 +83,10 @@ const server = createServer(async (req, res) => {
         return {
           id: c.id, created_at: c.created_at, email: c.email, body: c.body,
           customer_name: c.customer_name, customer_id: c.customer_id,
-          run_id: c.run_id, status: run?.status ?? 'received',
-          amount: run?.plan?.amount ?? null, currency: run?.plan?.currency ?? 'usd',
+          run_id: c.run_id, status: run?.status ?? (c.run_id ? 'unavailable' : 'received'),
+          outcome: run?.finding?.outcome ?? null, hold: run?.hold ?? null,
+          amount: run?.plan?.total_amount ?? run?.plan?.amount ?? null,
+          currency: run?.plan?.refunds?.[0]?.currency ?? run?.plan?.currency ?? 'usd',
         };
       });
       return json(res, 200, { complaints: rows });
@@ -85,21 +100,57 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { ...complaints.customerView(c, run), run_id: c.run_id });
     }
 
+    if (p === '/api/lemma/issues' && req.method === 'GET') {
+      return json(res, 200, await listIssues({ force: url.searchParams.get('refresh') === 'true' }));
+    }
+    const li = p.match(/^\/api\/runs\/([^/]+)\/lemma$/);
+    if (li && req.method === 'GET') {
+      const run = runs.get(li[1]);
+      if (!run) return json(res, 404, { error: 'no such run' });
+      return json(res, 200, await issuesForRun(run));
+    }
+
     if (p === '/api/config') {
       return json(res, 200, {
         tracing: tracingEnabled,
         release: currentRelease,
         twin: Boolean(process.env.SLACK_API_URL),
-        slackApi: process.env.SLACK_API_URL || 'https://slack.com',
-        repo: process.env.GITHUB_REPO,
+        slackApi: sqliteProviderEnabled() ? 'sqlite' : (process.env.SLACK_API_URL || 'https://slack.com'),
+        repo: sqliteProviderEnabled() ? null : process.env.GITHUB_REPO,
         engine: 'langgraph',
         model: process.env.LLM_MODE === 'rules' ? 'rules engine' : (process.env.OPENAI_MODEL || 'rules engine'),
+        provider: sqliteProviderEnabled() ? 'sqlite' : 'live',
+        demo: integratedS1Demo ? 's1' : null,
       });
     }
 
+    if (p === '/api/demo' && req.method === 'GET') {
+      return json(res, 200, getS1Demo());
+    }
+    if (p === '/api/demo/reset' && req.method === 'POST') {
+      if ([...runs.values()].some(run => run.busy)) return json(res, 409, { error: 'Cannot reset while a run is active.' });
+      if (sqliteProviderEnabled()) return json(res, 200, prepareS1Demo());
+      const { prepareIntegratedS1Demo } = await import('./demo-live.js');
+      return json(res, 200, await prepareIntegratedS1Demo());
+    }
+
     if (p === '/api/fixtures') {
+      if (sqliteProviderEnabled()) {
+        const demo = getS1Demo();
+        return json(res, 200, { scenarios: [{
+          scenario: 's1',
+          label: 'Northwind - billed twice',
+          report: 'We were billed twice for September.',
+          customer_id: demo.customer?.id,
+          email: demo.customer?.email,
+          expect: 'refund',
+          charges: demo.charges,
+        }] });
+      }
       const f = 'fixtures/current.json';
-      return json(res, 200, existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : { scenarios: [] });
+      const fixtures = existsSync(f) ? JSON.parse(readFileSync(f, 'utf8')) : { scenarios: [] };
+      if (integratedS1Demo) fixtures.scenarios = (fixtures.scenarios || []).filter(item => item.scenario === 's1');
+      return json(res, 200, fixtures);
     }
 
     if (p === '/api/investigate' && req.method === 'POST') {
@@ -141,30 +192,19 @@ const server = createServer(async (req, res) => {
     const ap = p.match(/^\/api\/approve\/(.+)$/);
     if (ap && req.method === 'POST') {
       const { approver, plan_id } = await readBody(req);
-      const run = runs.get(ap[1]);
-      if (!run) return json(res, 404, { error: 'no such run' });
-      if (!run.plan) return json(res, 409, { error: 'run has no plan' });
-      if (plan_id && run.plan.plan_id !== plan_id) {
-        return json(res, 409, { error: 'plan changed since it was shown' });
-      }
-      approve(run, approver || 'ops@warrant.test');
+      const run = approveRefundRequest({ runId: ap[1], planId: plan_id, approver });
       json(res, 200, { ok: true });
-      execute(run).catch((e) => {
-        run.status = 'error';
-        run.error = e.message;
-        run.emit('update', run.snapshot());
-      });
+      executeApprovedRefund(run).catch(() => {});
       return;
     }
 
     const dc = p.match(/^\/api\/decline\/(.+)$/);
     if (dc && req.method === 'POST') {
       const { approver, reason } = await readBody(req);
-      const run = runs.get(dc[1]);
-      if (!run?.plan) return json(res, 404, { error: 'no plan on that run' });
-      if (run.status !== 'awaiting_approval') return json(res, 409, { error: 'not awaiting a decision' });
       json(res, 200, { ok: true });
-      decline(run, approver || 'ops@warrant.test', reason).catch((e) => {
+      declineRefundRequest({ runId: dc[1], approver, reason }).catch((e) => {
+        const run = runs.get(dc[1]);
+        if (!run) return;
         run.pending = [{ step: 'decline', error: e.message }];
         run.emit('update', run.snapshot());
       });
@@ -199,7 +239,7 @@ const server = createServer(async (req, res) => {
     if (jr) {
       const run = runs.get(jr[1]);
       const planId = run?.plan?.plan_id || jr[1];
-      return json(res, 200, { plan_id: planId, operations: journalFor(planId) });
+      return json(res, 200, { plan_id: planId, operations: journalFor(run?.id || planId) });
     }
 
     const tr = p.match(/^\/api\/trace\/(.+)$/);
@@ -218,20 +258,30 @@ const server = createServer(async (req, res) => {
     }
 
     if (p === '/api/reset' && req.method === 'POST') {
+      if ([...runs.values()].some(run => run.busy)) return json(res, 409, { error: 'Cannot reset while a run is active.' });
+      if (sqliteProviderEnabled()) return json(res, 200, prepareS1Demo());
+      if (integratedS1Demo) {
+        const { prepareIntegratedS1Demo } = await import('./demo-live.js');
+        return json(res, 200, await prepareIntegratedS1Demo());
+      }
       resetJournal();
       complaints.reset();
-      runs.clear();
+      resetRuns();
       return json(res, 200, { ok: true });
     }
 
     res.writeHead(404).end('not found');
   } catch (e) {
-    json(res, 500, { error: e.message });
+    if (!res.headersSent) json(res, e.statusCode || 500, { error: e.message });
   }
 });
+
+await recoverRuns();
+if (sqliteProviderEnabled()) ensureS1Demo();
 
 server.listen(PORT, () => {
   console.log(`\n  Warrant console  http://localhost:${PORT}`);
   console.log(`  tracing: ${tracingEnabled ? 'on · ' + currentRelease : 'off'}`);
-  console.log(`  slack:   ${process.env.SLACK_API_URL ? 'TWIN ' + process.env.SLACK_API_URL : 'real'}\n`);
+  console.log(`  provider: ${sqliteProviderEnabled() ? 'sqlite demo · S1' : integratedS1Demo ? 'live demo · S1' : 'live'}`);
+  console.log(`  records: ${sqliteProviderEnabled() ? 'sqlite demo' : process.env.SLACK_API_URL ? 'Slack twin ' + process.env.SLACK_API_URL : 'GitHub + Slack'}\n`);
 });

@@ -13,6 +13,7 @@
 import 'dotenv/config';
 import Stripe from 'stripe';
 import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const GH = { token: process.env.GITHUB_TOKEN, repo: process.env.GITHUB_REPO };
@@ -51,7 +52,7 @@ async function gh(path, init = {}) {
 }
 
 /** S1 — a genuine duplicate, corroborated by an incident. The agent should act. */
-async function s1() {
+export async function buildS1Fixture() {
   head('S1 — Northwind: genuine duplicate');
   const customer = await stripe.customers.create({
     name: 'Northwind Trading Co. (SEEDED FIXTURE)',
@@ -146,7 +147,22 @@ async function s6() {
   };
 }
 
-const BUILDERS = { s1, s2, s6 };
+const BUILDERS = { s1: buildS1Fixture, s2, s6 };
+
+export function saveFixtures(built) {
+  mkdirSync('fixtures', { recursive: true });
+  const prev = existsSync('fixtures/current.json') ? JSON.parse(readFileSync('fixtures/current.json', 'utf8')).scenarios || [] : [];
+  const merged = [...prev.filter((p) => !built.some((b) => b.scenario === p.scenario)), ...built]
+    .sort((a, b) => a.scenario.localeCompare(b.scenario));
+  writeFileSync('fixtures/current.json', JSON.stringify({ built_at: new Date().toISOString(), scenarios: merged }, null, 2));
+  return merged;
+}
+
+export async function prepareLiveS1Demo() {
+  const fixture = await buildS1Fixture();
+  saveFixtures([fixture]);
+  return fixture;
+}
 
 async function main() {
   if (!process.env.STRIPE_SECRET_KEY?.startsWith('sk_test_')) {
@@ -162,12 +178,7 @@ async function main() {
     built.push(await BUILDERS[s]());
   }
 
-  mkdirSync('fixtures', { recursive: true });
-  // Merge, so building one scenario never drops the others.
-  const prev = existsSync('fixtures/current.json') ? JSON.parse(readFileSync('fixtures/current.json', 'utf8')).scenarios || [] : [];
-  const merged = [...prev.filter((p) => !built.some((b) => b.scenario === p.scenario)), ...built]
-    .sort((a, b) => a.scenario.localeCompare(b.scenario));
-  writeFileSync('fixtures/current.json', JSON.stringify({ built_at: new Date().toISOString(), scenarios: merged }, null, 2));
+  saveFixtures(built);
 
   head('Ready');
   for (const b of built) {
@@ -176,4 +187,6 @@ async function main() {
   console.log('\n  fixtures/current.json written — the console reads this for its report buttons.\n');
 }
 
-main().catch((e) => { console.error(`\n\x1b[31m${e.message}\x1b[0m\n`); process.exit(1); });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => { console.error(`\n\x1b[31m${e.message}\x1b[0m\n`); process.exit(1); });
+}

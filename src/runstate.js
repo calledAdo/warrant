@@ -4,6 +4,8 @@
  * holds the Lemma trace handle for the segment currently executing.
  */
 import { EventEmitter } from 'node:events';
+import { randomUUID } from 'node:crypto';
+import { db } from './storage.js';
 
 export const runs = new Map();
 
@@ -20,6 +22,17 @@ export class Run extends EventEmitter {
     this.status = 'running';
     this.pending = [];
     this.engine = { framework: 'langgraph', next: [], checkpoints: 0 };
+  }
+
+  persist() {
+    if (['complete','declined','refused'].includes(this.status) && !this.closedAt) this.closedAt = new Date().toISOString();
+    const state = Object.fromEntries(Object.entries(this).filter(([k]) => !k.startsWith('_') && !['trace','busy'].includes(k)));
+    db.prepare('INSERT OR REPLACE INTO runs VALUES (?,?)').run(this.id, JSON.stringify(state));
+  }
+
+  emit(event, ...args) {
+    if (event === 'update') this.persist();
+    return super.emit(event, ...args);
   }
 
   /** Tag the most recent attempt as journal-skipped (no external write happened). */
@@ -79,12 +92,16 @@ export class Run extends EventEmitter {
       caseNumber: this.caseNumber,
       caseUrl: this.caseUrl ?? null,
       pending: this.pending,
+      refundProgress: this.refundProgress ?? null,
       customerId: this.customerId,
       report: this.report,
       approver: this.approver ?? null,
       declineReason: this.declineReason ?? null,
       error: this.error ?? null,
       engine: this.engine,
+      hold: this.hold ?? null,
+      outcome: this.finding?.outcome ?? null,
+      closedAt: this.closedAt ?? null,
     };
   }
 }
@@ -98,9 +115,19 @@ const STEPS_INVESTIGATE = [
 ];
 
 export function createRun(report, customerId) {
-  const id = 'run_' + Math.random().toString(36).slice(2, 10);
+  const id = 'run_' + randomUUID();
   const run = new Run(id, report, customerId);
   runs.set(id, run);
   for (const [k, l] of STEPS_INVESTIGATE) run.step(k, l, 'idle');
   return run;
+}
+
+for (const row of db.prepare('SELECT * FROM runs').all()) {
+  const saved = JSON.parse(row.state);
+  const run = Object.assign(new Run(saved.id, saved.report, saved.customerId), saved);
+  runs.set(run.id, run);
+}
+export function resetRuns() {
+  db.exec('DELETE FROM runs; DELETE FROM checkpoints; DELETE FROM checkpoint_writes;');
+  runs.clear();
 }

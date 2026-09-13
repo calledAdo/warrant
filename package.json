@@ -11,13 +11,21 @@
     "verify:slack": "node verify/slack-post.mjs",
     "verify:lemma": "node verify/lemma-trace.mjs",
     "start": "node src/server.js",
+    "start:demo": "WARRANT_DB=data/warrant-live-demo.db WARRANT_PROVIDER=live WARRANT_DEMO=s1 node src/server.js",
+    "demo:prepare": "WARRANT_DB=data/warrant-live-demo.db WARRANT_PROVIDER=live WARRANT_DEMO=s1 node scripts/prepare-live-demo.mjs",
+    "start:demo:sqlite": "WARRANT_DB=data/warrant-demo.db WARRANT_PROVIDER=sqlite node src/server.js",
+    "demo:prepare:sqlite": "WARRANT_DB=data/warrant-demo.db WARRANT_PROVIDER=sqlite node scripts/prepare-demo.mjs",
     "fixtures": "node fixtures/build.mjs --all",
     "llm:ping": "node -e \"import('./src/llm.js').then(m=>m.ping().then(console.log))\"",
     "verify:llm": "node verify/llm-provider.mjs",
     "lemma:policy": "node scripts/upload-policy.mjs",
     "verify:injection": "node verify/injection.mjs",
     "graph": "node scripts/print-graph.mjs",
-    "fixtures:demo": "node fixtures/build.mjs --demo"
+    "fixtures:demo": "node fixtures/build.mjs --demo",
+    "test": "node --experimental-test-module-mocks --test test/*.test.mjs",
+    "lemma:issues": "node scripts/lemma-issues.mjs",
+    "journal:reconcile": "node scripts/reconcile-operation.mjs",
+    "history:archive": "node scripts/archive-history.mjs"
   },
   "dependencies": {
     "@langchain/core": "^1.2.11",
@@ -25,6 +33,7 @@
     "@slack/web-api": "^7.8.0",
     "@uselemma/tracing": "^7.12.0",
     "dotenv": "^16.4.7",
-    "stripe": "^17.5.0"
+    "stripe": "^17.5.0",
+    "@langchain/langgraph-checkpoint": "1.1.5"
   }
 }

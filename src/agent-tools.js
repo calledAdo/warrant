@@ -149,6 +149,7 @@ const compactCharge = (c) => ({
   created: c.created_iso,
   refunded: c.amount_refunded > 0,
   description: (c.description || '').slice(0, 120),
+  billing_keys: c.billing_keys || [],
 });
 
 /** Run one tool call with the customer locked in. Returns { content, charges, incidents, summary }. */
@@ -164,6 +165,9 @@ export async function runTool(call, customerId) {
       charges: r.charges,
       incidents: [],
       summary: `${r.charges.length} charge${r.charges.length === 1 ? '' : 's'}${r.has_more ? ', more available' : ''}`,
+      has_more: r.has_more,
+      next_cursor: r.next_cursor,
+      window: r.window,
       content: JSON.stringify({
         charges: r.charges.map(compactCharge),
         has_more: r.has_more,
@@ -184,7 +188,9 @@ export async function runTool(call, customerId) {
       incidents: r.incidents.slice(0, 8),
       summary: `${Math.min(8, r.incidents.length)} incident${r.incidents.length === 1 ? '' : 's'} ${r.window.from}…${r.window.to}`,
       content: JSON.stringify({
-        incidents: r.incidents.slice(0, 8).map((i) => ({ number: i.number, created: i.created_iso, title: i.title, body: i.body.replace(/\s+/g, ' ').slice(0, 120) })),
+        incidents: r.incidents.slice(0, 8).map((i) => ({ number: i.number, created: i.created_iso, title: i.title,
+          coverage_start: i.coverage_start_iso || null, coverage_end: i.coverage_end_iso || null,
+          body: i.body.replace(/\s+/g, ' ').slice(0, 120) })),
         shown: Math.min(8, r.incidents.length),
         matched: r.incidents.length,
         window: r.window,
@@ -208,7 +214,7 @@ export function decide(finalMessage, chargesSeen, incidentsSeen) {
   }
   if (!p || !['duplicate', 'insufficient_evidence'].includes(p.verdict)) {
     const finding = {
-      verdict: 'insufficient_evidence', charge_to_refund: null, duplicate_of: null,
+      verdict: 'insufficient_evidence', outcome: 'insufficient_evidence', charge_to_refund: null, duplicate_of: null,
       grounds: 'The investigation did not reach a usable conclusion.',
       missing_evidence: 'The agent did not return a valid verdict, so no correction is proposed.',
       evidence: chargesSeen.map((c) => ({ source: 'stripe', id: c.id, detail: `${(c.amount / 100).toFixed(2)} ${c.currency.toUpperCase()}` })),
@@ -218,7 +224,7 @@ export function decide(finalMessage, chargesSeen, incidentsSeen) {
   }
   if (!chargesSeen.length && p.verdict === 'duplicate') {
     return {
-      finding: { ...p, verdict: 'insufficient_evidence', charge_to_refund: null, duplicate_of: null, missing_evidence: 'No charges were examined.' },
+      finding: { ...p, verdict: 'insufficient_evidence', outcome: 'insufficient_evidence', charge_to_refund: null, duplicate_of: null, missing_evidence: 'No charges were examined.' },
       guard: { overridden: true, reason: 'the model proposed a refund without searching any charges' },
     };
   }
@@ -230,12 +236,17 @@ export function decide(finalMessage, chargesSeen, incidentsSeen) {
 export async function rulesInvestigation(customerId) {
   const charges = [];
   let cursor;
+  let chargesComplete = false;
   for (let i = 0; i < 5; i++) {
     const r = await stripe.searchCharges(customerId, { cursor });
     charges.push(...r.charges);
-    if (!r.next_cursor) break;
+    if (!r.next_cursor) { chargesComplete = true; break; }
     cursor = r.next_cursor;
   }
-  const { incidents } = await github.searchIncidents({ since: new Date(Date.now() - 30 * 86400000).toISOString() });
-  return { charges, incidents, finding: assembleCaseByRules({ charges, incidents }) };
+  const oldest = charges.reduce((min, c) => Math.min(min, c.created), Math.floor(Date.now() / 1000));
+  const { incidents } = await github.searchIncidents({
+    since: new Date((oldest - 86400) * 1000).toISOString(),
+    until: new Date().toISOString(),
+  });
+  return { charges, incidents, chargesComplete, finding: assembleCaseByRules({ charges, incidents }) };
 }
