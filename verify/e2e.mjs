@@ -28,7 +28,8 @@ async function s1() {
   await investigate(run);
   info(steps(run));
 
-  run.status === 'awaiting_approval' ? pass('proposed and awaiting approval') : fail(`status ${run.status}`);
+  run.status === 'awaiting_approval' ? pass('proposed and awaiting approval')
+    : fail(`status ${run.status} — model=${run.llm?.model} guard=${JSON.stringify(run.guard?.reason)} missing="${run.finding?.missing_evidence}"`);
   run.plan ? pass(`plan ${run.plan.plan_id} · refund ${run.plan.charge_id}`) : fail('no plan');
   run.caseNumber ? pass(`case #${run.caseNumber} written`) : fail('no case');
   if (!run.plan) return null;
