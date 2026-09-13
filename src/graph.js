@@ -1,14 +1,17 @@
 /**
  * Warrant as a LangGraph state machine.
  *
- *   read_charges → read_incidents → assemble → write_case ─┬→ post_refusal → END
- *                                                           └→ propose → human_review (interrupt)
+ *   load_customer → agent ⇄ tools (search_charges, search_incidents; ≤ 8 calls)
+ *                 → decide → write_case ─┬→ post_refusal → END
+ *                                        └→ propose → human_review (interrupt)
  *   human_review ─┬→ verify_charge → refund → verify_refund ─┬→ update_case  ─┬→ finalize → END
  *                 │                                          └→ update_slack ─┘
  *                 └→ record_decline ─┬→ decline_case  ─┬→ decline_done → END
  *                                    └→ decline_slack ─┘
  *
- * The model is one node (assemble). Every other node is deterministic code.
+ * The model drives one loop (agent ⇄ tools): it chooses what evidence to look
+ * up and how far back to go, through read-only tools scoped and capped in code.
+ * decide re-checks its verdict in code. Every node after that is deterministic.
  * The graph is checkpointed after each super-step, so:
  *   - the approval is a real pause: interrupt() persists state and the run
  *     resumes with the human's decision,
@@ -25,7 +28,9 @@ import { StateGraph, Annotation, START, END, MemorySaver, interrupt } from '@lan
 import * as stripe from './adapters/stripe.js';
 import * as github from './adapters/github.js';
 import * as slack from './adapters/slack.js';
-import { assembleCase, caseBody } from './agent.js';
+import { caseBody } from './agent.js';
+import { chatWithTools } from './llm.js';
+import { TOOLS, MAX_TOOL_CALLS, FINISH, recoverToolCall, initialMessages, runTool, decide as decideFinding, rulesInvestigation } from './agent-tools.js';
 import { buildPlan, hashPlan, isExpired } from './plan.js';
 import { withJournal, getApproval } from './journal.js';
 import { runs } from './runstate.js';
@@ -36,6 +41,9 @@ const State = Annotation.Root({
   customer: Annotation,
   charges: Annotation,
   incidents: Annotation,
+  messages: Annotation({ reducer: (a, b) => a.concat(b), default: () => [] }),
+  toolCalls: Annotation({ reducer: (a, b) => a + b, default: () => 0 }),
+  llmFailed: Annotation,
   finding: Annotation,
   caseNumber: Annotation,
   caseUrl: Annotation,
@@ -69,51 +77,137 @@ const usd = (cents) => '$' + (cents / 100).toFixed(2);
 
 // ---------------------------------------------------------------- investigate
 
-async function read_charges(state, config) {
+const mergeById = (a, b, key) => {
+  const m = new Map((a || []).map((x) => [x[key], x]));
+  for (const x of b || []) m.set(x[key], x);
+  return [...m.values()];
+};
+
+async function load_customer(state, config) {
   const { run, trace } = ctx(config);
-  run.step('read_charges', 'read charges', 'active');
   const customer = await tool(trace, 'stripe.get_customer', { id: state.customerId }, () => stripe.getCustomer(state.customerId));
-  const charges = await tool(trace, 'stripe.list_charges', { customer: state.customerId }, () => stripe.listCharges(state.customerId));
   run.customer = customer;
+  run.searches = [];
+  run.charges = [];
+  run.incidentsSeen = [];
+  return { customer, charges: [], incidents: [], messages: initialMessages({ report: state.report, customer }) };
+}
+
+/** One model turn. The first turn must search; once the cap is hit it must answer. */
+async function agent(state, config) {
+  const { run, trace } = ctx(config);
+  const turn = (run.turns = (run.turns || 0) + 1);
+  run.step('assemble', 'assess', 'active', turn === 1 ? 'deciding what to look up…' : `turn ${turn} · ${state.toolCalls} searches so far`);
+  // Every turn must be a tool call: a search, or submit_finding. Once the
+  // search budget is spent the model is told to finish.
+  const budgetSpent = state.toolCalls >= MAX_TOOL_CALLS;
+  const nudge = budgetSpent ? [{ role: 'user', content: 'Search budget used. Call submit_finding now with the evidence you have.' }] : [];
+  const messages = [...state.messages, ...nudge];
+  try {
+    let out;
+    try {
+      out = await chatWithTools({ messages, tools: TOOLS, toolChoice: 'required' });
+    } catch (e) {
+      const recovered = /tool_use_failed/.test(e.message) ? recoverToolCall(e) : null;
+      if (!recovered) throw e;
+      console.warn(`  [agent] recovered malformed tool call: ${recovered.tool_calls.map((t) => t.function.name).join(', ')}`);
+      trace.recordSpan({ name: 'recovered-tool-call', input: { provider_error: e.body?.error?.code }, output: recovered.tool_calls });
+      out = { message: recovered, model: process.env.OPENAI_MODEL, durationMs: 0, usage: { inputTokens: 0, outputTokens: 0 } };
+    }
+    trace.recordGeneration({
+      name: `agent-turn-${turn}`,
+      model: out.model,
+      input: { budget_spent: budgetSpent, messages: messages.length },
+      output: out.message.tool_calls
+        ? { tool_calls: out.message.tool_calls.map((t) => ({ name: t.function.name, arguments: t.function.arguments })) }
+        : out.message.content,
+      usage: out.usage,
+      durationMs: out.durationMs,
+    });
+    const l = run.llm || { model: out.model, ms: 0, inTok: 0, outTok: 0, rules: false, turns: 0 };
+    run.llm = { ...l, model: out.model, ms: l.ms + out.durationMs, inTok: l.inTok + out.usage.inputTokens, outTok: l.outTok + out.usage.outputTokens, turns: turn };
+    return { messages: [...nudge, out.message] };
+  } catch (e) {
+    console.warn(`  [agent] model unavailable (${e.message.slice(0, 80)}) — falling back to rules`);
+    return { llmFailed: e.message };
+  }
+}
+
+const routeAgent = (state) => {
+  if (state.llmFailed) return 'decide';
+  const last = state.messages[state.messages.length - 1];
+  const calls = last?.tool_calls || [];
+  if (!calls.length || calls.some((t) => t.function?.name === FINISH)) return 'decide';
+  return state.toolCalls < MAX_TOOL_CALLS ? 'tools' : 'decide';
+};
+
+/** Execute the model's tool calls with the customer locked in and caps applied. */
+async function tools(state, config) {
+  const { run, trace } = ctx(config);
+  const last = state.messages[state.messages.length - 1];
+  const calls = (last.tool_calls || []).filter((t) => t.function?.name !== FINISH).slice(0, Math.max(0, MAX_TOOL_CALLS - state.toolCalls));
+  const replies = [];
+  let charges = state.charges || [];
+  let incidents = state.incidents || [];
+
+  for (const call of calls) {
+    const key = call.function?.name === 'search_incidents' ? 'read_incidents' : 'read_charges';
+    const label = key === 'read_incidents' ? 'search incidents' : 'search charges';
+    run.step(key, label, 'active', `${call.function?.name}(${(call.function?.arguments || '').slice(0, 80)})`);
+    try {
+      const r = await tool(trace, call.function?.name || 'unknown_tool', JSON.parse(call.function?.arguments || '{}'), () => runTool(call, state.customerId));
+      charges = mergeById(charges, r.charges, 'id');
+      incidents = mergeById(incidents, r.incidents, 'number');
+      run.searches.push({ tool: r.name, args: r.args, summary: r.summary, at: Date.now() });
+      replies.push({ role: 'tool', tool_call_id: call.id, content: r.content });
+      run.step(key, label, 'done', key === 'read_charges'
+        ? `${run.searches.filter((x) => x.tool === 'search_charges').length} searches · ${charges.length} charges seen`
+        : `${run.searches.filter((x) => x.tool === 'search_incidents').length} searches · ${incidents.length} incidents seen`);
+    } catch (e) {
+      replies.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: e.message }) });
+      run.searches.push({ tool: call.function?.name, args: call.function?.arguments, summary: `error: ${e.message}`, at: Date.now() });
+      run.step(key, label, 'done', `search failed: ${e.message.slice(0, 60)}`);
+    }
+  }
+  // Any calls beyond the cap get an explicit answer so the transcript stays valid.
+  for (const call of (last.tool_calls || []).filter((t) => t.function?.name !== FINISH).slice(calls.length)) {
+    replies.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ error: 'search limit reached; answer with the evidence you have' }) });
+  }
   run.charges = charges;
-  run.step('read_charges', 'read charges', 'done', `${charges.length} charges · ${charges.map((c) => usd(c.amount)).join(', ')}`);
-  return { customer, charges };
-}
-
-async function read_incidents(_state, config) {
-  const { run, trace } = ctx(config);
-  run.step('read_incidents', 'search incidents', 'active');
-  const incidents = await tool(trace, 'github.find_incidents', { repo: process.env.GITHUB_REPO }, () => github.findIncidents());
   run.incidentsSeen = incidents.map((i) => ({ number: i.number, title: i.title, url: i.url }));
-  run.step('read_incidents', 'search incidents', 'done',
-    incidents.length ? `#${incidents[0].number} ${incidents[0].title.slice(0, 48)}` : 'none found');
-  return { incidents };
+  run.emit('update', run.snapshot());
+  return { messages: replies, toolCalls: calls.length, charges, incidents };
 }
 
-async function assemble(state, config) {
+/** Parse the verdict and enforce the duplicate rule against what the tools returned. */
+async function decide(state, config) {
   const { run, trace } = ctx(config);
-  run.step('assemble', 'assemble case', 'active');
-  const out = await assembleCase({ report: state.report, customer: state.customer, charges: state.charges, incidents: state.incidents });
-  const f = out.parsed;
-  trace.recordGeneration({
-    name: 'assemble-case',
-    model: out.model,
-    input: [{ role: 'user', content: state.report }],
-    output: JSON.stringify(f),
-    usage: out.usage,
-    durationMs: out.durationMs,
-  });
-  run.finding = f;
-  run.guard = out.guard ? { overridden: out.guard.overridden, reason: out.guard.reason ?? null } : null;
+  let finding, guard, charges = state.charges || [], incidents = state.incidents || [];
+
+  if (state.llmFailed) {
+    const r = await rulesInvestigation(state.customerId);
+    charges = r.charges; incidents = r.incidents; finding = r.finding;
+    guard = { overridden: false, reason: null };
+    run.llm = { model: 'rules-engine (LLM unavailable)', ms: 0, inTok: 0, outTok: 0, rules: true, turns: run.turns || 0 };
+    run.charges = charges;
+    run.incidentsSeen = incidents.map((i) => ({ number: i.number, title: i.title, url: i.url }));
+  } else {
+    const last = state.messages[state.messages.length - 1];
+    ({ finding, guard } = decideFinding(last, charges, incidents));
+  }
+
+  run.finding = finding;
+  run.guard = guard;
   trace.recordSpan({
     name: 'duplicate-rule-check',
-    input: { model_verdict: out.guard?.finding?.model_verdict ?? f.verdict },
-    output: run.guard ?? { overridden: false },
+    input: { charges_seen: charges.length, incidents_seen: incidents.length, searches: (run.searches || []).length },
+    output: guard,
   });
-  run.llm = { model: out.model, ms: out.durationMs, inTok: out.usage?.inputTokens ?? 0, outTok: out.usage?.outputTokens ?? 0, rules: Boolean(out.rulesMode) };
-  run.step('assemble', 'assemble case', f.verdict === 'duplicate' ? 'done' : 'refused',
-    f.verdict === 'duplicate' ? f.grounds : f.missing_evidence);
-  return { finding: f };
+  run.step('assemble', 'assess', finding.verdict === 'duplicate' ? 'done' : 'refused',
+    finding.verdict === 'duplicate' ? finding.grounds : finding.missing_evidence);
+  if (!run.steps.find((x) => x.key === 'read_charges')?.attempts?.length) run.step('read_charges', 'search charges', 'done', 'no search made');
+  if (!run.steps.find((x) => x.key === 'read_incidents')?.attempts?.length) run.step('read_incidents', 'search incidents', 'idle');
+  return { finding, charges, incidents };
 }
 
 async function write_case(state, config) {
@@ -316,9 +410,10 @@ function decline_done(_state, config) {
 export const checkpointer = new MemorySaver();
 
 export const graph = new StateGraph(State)
-  .addNode('read_charges', read_charges)
-  .addNode('read_incidents', read_incidents)
-  .addNode('assemble', assemble)
+  .addNode('load_customer', load_customer)
+  .addNode('agent', agent)
+  .addNode('tools', tools)
+  .addNode('decide', decide)
   .addNode('write_case', write_case)
   .addNode('post_refusal', post_refusal)
   .addNode('propose', propose)
@@ -334,10 +429,11 @@ export const graph = new StateGraph(State)
   .addNode('decline_slack', decline_slack)
   .addNode('decline_done', decline_done)
 
-  .addEdge(START, 'read_charges')
-  .addEdge('read_charges', 'read_incidents')
-  .addEdge('read_incidents', 'assemble')
-  .addEdge('assemble', 'write_case')
+  .addEdge(START, 'load_customer')
+  .addEdge('load_customer', 'agent')
+  .addConditionalEdges('agent', routeAgent, ['tools', 'decide'])
+  .addEdge('tools', 'agent')
+  .addEdge('decide', 'write_case')
   .addConditionalEdges('write_case', routeCase, ['propose', 'post_refusal'])
   .addEdge('post_refusal', END)
   .addEdge('propose', 'human_review')

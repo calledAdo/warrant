@@ -139,6 +139,27 @@ async function s4() {
   }
 }
 
+async function s6() {
+  head('S6 — duplicate buried under 22 newer charges; the agent must page back');
+  execFileSync('node', ['fixtures/build.mjs', '--scenario', 's6'], { stdio: 'ignore' });
+  const f = JSON.parse(readFileSync('fixtures/current.json', 'utf8')).scenarios.find((x) => x.scenario === 's6');
+  const flat = await stripe.listCharges(f.customer_id, 20);
+  const pairIds = f.charges.map((c) => c.id);
+  !pairIds.every((id) => flat.some((c) => c.id === id))
+    ? pass('a flat "last 20 charges" fetch would NOT contain the duplicate')
+    : fail('fixture broken: the pair is within the first 20');
+
+  const run = createRun(f.report, f.customer_id);
+  await investigate(run);
+  const pages = run.searches.filter((x) => x.tool === 'search_charges').length;
+  info(`searches: ${run.searches.map((x) => `${x.tool}${x.args?.cursor ? '(page)' : ''}`).join(' → ')}`);
+  !run.llm?.rules ? pass(`the model decided (${run.llm?.model}, ${run.llm?.turns} turns)`) : fail('fell back to the rules engine');
+  pages >= 3 ? pass(`paged back through ${pages} charge searches, ${run.charges.length} charges seen`) : fail(`only ${pages} charge searches`);
+  run.status === 'awaiting_approval' ? pass('proposed a refund') : fail(`status ${run.status} — ${run.finding?.missing_evidence}`);
+  run.finding?.charge_to_refund === f.charges[1].id && run.finding?.duplicate_of === f.charges[0].id
+    ? pass('refund targets the later charge of the buried pair') : fail(`wrong charges: refund=${run.finding?.charge_to_refund}`);
+}
+
 console.log(`\n  mode: ${process.env.LLM_MODE === 'rules' || !process.env.OPENAI_API_KEY ? 'RULES ENGINE' : 'LLM'}`);
 console.log(`  slack: ${process.env.SLACK_API_URL ? 'TWIN' : 'real'}`);
 reset();
@@ -147,6 +168,7 @@ const run1 = await s1();
 await s2();
 await s3(run1);
 await s4();
+if (!process.argv.includes('--skip-s6')) await s6();
 
 console.log(`\n\x1b[1m  ${failures.length ? '\x1b[31m' + failures.length + ' FAILURE(S)' : '\x1b[32mALL SCENARIOS PASSED'}\x1b[0m\n`);
 process.exit(failures.length ? 1 : 0);

@@ -71,6 +71,8 @@ export class Run extends EventEmitter {
       llm: this.llm ?? null,
       guard: this.guard ?? null,
       incidents: this.incidentsSeen ?? null,
+      searches: this.searches ?? [],
+      chargesSeen: (this.charges || []).length,
       now: Date.now(),
       steps: this.steps,
       plan: this.plan,
@@ -88,9 +90,9 @@ export class Run extends EventEmitter {
 }
 
 const STEPS_INVESTIGATE = [
-  ['read_charges', 'read charges'],
+  ['read_charges', 'search charges'],
   ['read_incidents', 'search incidents'],
-  ['assemble', 'assemble case'],
+  ['assemble', 'assess'],
   ['write_case', 'write case'],
   ['post_proposal', 'post to slack'],
 ];

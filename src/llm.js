@@ -80,3 +80,51 @@ export async function ping() {
   });
   return r.parsed;
 }
+
+/**
+ * One model turn with tools. Returns the assistant message (which may carry
+ * tool_calls) plus usage. No response_format here: providers reject it
+ * alongside tools, and the final answer is parsed by the caller.
+ */
+export async function chatWithTools({ messages, tools, toolChoice = 'auto', maxTokens = 1400 }) {
+  const started = Date.now();
+  const body = JSON.stringify({ model: MODEL(), messages, tools, tool_choice: toolChoice, temperature: 0, max_tokens: maxTokens });
+  let res;
+  // Free tiers rate-limit per minute. Wait as long as the provider asks (capped)
+  // and retry before treating the model as unavailable.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    res = await fetch(`${BASE()}/chat/completions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body,
+    });
+    if (res.status !== 429) break;
+    const text = await res.text().catch(() => '');
+    const hinted = Number(res.headers.get('retry-after')) * 1000 || (Number((text.match(/try again in ([\d.]+)(ms|s)/) || [])[1]) * ((text.match(/try again in [\d.]+(ms|s)/) || [])[1] === 's' ? 1000 : 1)) || 0;
+    const wait = Math.min(15000, Math.max(hinted + 250, 1000 * 2 ** attempt));
+    console.warn(`  [llm] rate limited, retrying in ${Math.round(wait)}ms`);
+    await new Promise((r) => setTimeout(r, wait));
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    const err = new Error(`LLM ${res.status}: ${text.slice(0, 300)}`);
+    try { err.body = JSON.parse(text); } catch {}
+    throw err;
+  }
+  const json = await res.json();
+  const message = json.choices?.[0]?.message ?? { role: 'assistant', content: '' };
+  return {
+    message: { role: 'assistant', content: message.content ?? '', ...(message.tool_calls?.length ? { tool_calls: message.tool_calls } : {}) },
+    model: json.model || MODEL(),
+    durationMs: Date.now() - started,
+    usage: { inputTokens: json.usage?.prompt_tokens ?? 0, outputTokens: json.usage?.completion_tokens ?? 0 },
+  };
+}
+
+/** Pull a JSON object out of model text (tolerates fences and prose). */
+export function parseJSONObject(text) {
+  try { return JSON.parse(text); } catch {}
+  const m = String(text || '').match(/\{[\s\S]*\}/);
+  if (!m) throw new Error(`model returned non-JSON: ${String(text).slice(0, 200)}`);
+  return JSON.parse(m[0]);
+}
