@@ -1,3 +1,5 @@
+> **Historical.** This is the brief written before the hackathon. The shipped design differs: it runs on LangGraph, has separate customer and billing-team pages, and enforces the duplicate rule in code. See the README for the current system.
+
 # Warrant — build brief
 
 > An agent that has to earn the right to move money — and refuses when the evidence doesn't support it.

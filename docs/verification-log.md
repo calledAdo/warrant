@@ -1,3 +1,5 @@
+> **Setup log.** Credential checks and API findings recorded while preparing Warrant, before and during the hackathon. See the README for the current system.
+
 # Warrant — setup plan and go/no-go gates
 
 > An agent that has to earn the right to move money — and refuses when the evidence doesn't support it.
