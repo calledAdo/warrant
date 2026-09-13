@@ -6,3 +6,7 @@ verify/out/
 *.log
 fixtures/current.json
 data/
+dist/
+test-results/
+playwright-report/
+*.tsbuildinfo

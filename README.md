@@ -154,7 +154,7 @@ What these tests established beyond pass/fail:
 
 ### Requirements
 
-- **Node.js 22.5 or newer** (uses the built-in `node:sqlite`; developed on Node 26)
+- **Node.js 22.12 or newer** (uses the built-in `node:sqlite`; developed on Node 26)
 - A **Stripe** account in test mode or a sandbox
 - A **GitHub** personal access token with `repo` scope, and a repository with Issues enabled for cases and incidents
 - A **Slack** app with the `chat:write` bot scope, installed in a workspace and invited to a channel
@@ -182,6 +182,17 @@ cp .env.example .env     # then fill in the values below
 | `LLM_MODE` | `llm` to use the model, `rules` to use the deterministic engine |
 
 ### Run it
+
+The frontend uses React, TypeScript and Tailwind, with the supplied 21st.dev design references and free Hugeicons. See [the frontend guide](docs/frontend.md) and [design system](DESIGN.md).
+
+```bash
+npm run dev                # UI at http://localhost:5173; starts the API too
+# Or build and serve the production frontend:
+npm run build
+npm start                  # http://localhost:3000
+```
+
+The existing API has no authentication layer and uses in-memory investigation checkpoints. Add server-side access controls and durable checkpoints before exposing the deployment publicly; see [deployment boundaries](docs/frontend.md#deployment-boundary).
 
 ```bash
 npm run verify              # check Stripe, GitHub and Slack credentials end to end

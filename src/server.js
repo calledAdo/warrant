@@ -7,9 +7,9 @@ import * as stripe from './adapters/stripe.js';
 import { reset as resetJournal } from './journal.js';
 import { dashboardUrlFor, tracingEnabled, currentRelease } from './trace.js';
 import * as complaints from './complaints.js';
+import { serveFrontend } from './frontend.js';
 
 const PORT = process.env.PORT || 3000;
-const page = (f) => readFileSync(new URL(`../public/${f}`, import.meta.url), 'utf8');
 
 const json = (res, code, body) => {
   res.writeHead(code, { 'Content-Type': 'application/json' });
@@ -28,18 +28,7 @@ const server = createServer(async (req, res) => {
   const p = url.pathname;
 
   try {
-    if (p === '/' || p === '/index.html') {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      return res.end(page('index.html'));
-    }
-    if (p === '/admin' || p === '/admin.html') {
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      return res.end(page('admin.html'));
-    }
-    if (p === '/app.css') {
-      res.writeHead(200, { 'Content-Type': 'text/css' });
-      return res.end(page('app.css'));
-    }
+    if (serveFrontend(req, res, p)) return;
 
     // ---- complaints ----------------------------------------------------
     if (p === '/api/complaints' && req.method === 'POST') {
