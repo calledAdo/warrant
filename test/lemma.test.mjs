@@ -42,7 +42,10 @@ test('trace lookup paginates and caches older IDs; occurrences only attach match
   assert.equal((await dashboardUrlFor('old')).internalId,'internal-old');assert.equal(pages,2);
   await listIssues({force:true});const result=await issuesForRun({id:'run',traceId:'old',traceIds:['old']});
   assert.equal(result.flagged,true);assert.deepEqual(result.issues.map(i=>i.id),['attached']);assert.equal(result.traces.length,1);
-  assert.equal(currentRelease.endsWith('-dirty'),Boolean(execSync('git status --porcelain').toString().trim()));
+  // Release tag: '-dirty' when the git tree has changes; 'dev' outside a git checkout (e.g. a ZIP download).
+  let dirty=null;try{dirty=Boolean(execSync('git status --porcelain',{stdio:['ignore','pipe','ignore']}).toString().trim());}catch{}
+  if(dirty===null) assert.equal(currentRelease,process.env.LEMMA_RELEASE||'dev');
+  else assert.equal(currentRelease.endsWith('-dirty'),dirty);
 });
 test('untagged and resolved issues cannot hold a new proposal',async()=>{
   globalThis.fetch=async()=>respond({issues:[{id:'resolved',status:'resolved',tags:[{name:'warrant-hold'}]},{id:'open',status:'open',tags:[]}],has_more:false});

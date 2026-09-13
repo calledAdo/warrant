@@ -1,6 +1,9 @@
 > llmtimeline · cross-agent work record. state.md is the live snapshot — rewrite it in place. sessions/ is append-only history — never edit past files. Any agent: read this file and the newest sessions/ entries before starting.
 
-# Project State — updated 2026-09-13T21:08Z by codex (session 004)
+# Project State — updated 2026-09-13T22:53Z by opus (session 005)
+
+## Current blockers
+- [!] GitHub repo calledAdo/warrant is PRIVATE: judges get a 404. Make it public (GitHub → Settings → General → Danger Zone → Change visibility) and push README changes. Demo video https://youtu.be/T2u0wYKTFAw is public.
 
 ## Goal
 Ship **Warrant** for the Multi-App AI Agent Hackathon (Sun 2026-09-13, build 09:30–16:00 PT, judging 16:00): an agent that investigates "charged twice" complaints across Stripe, GitHub and Slack, refunds only after a human approves the exact plan, and is traced in Lemma and failure-tested with Arga. Done means: a working public repo, a README meeting the judges' checklist, a 2-minute demo video linked in the README, and a submitted entry.
@@ -30,7 +33,7 @@ Ship **Warrant** for the Multi-App AI Agent Hackathon (Sun 2026-09-13, build 09:
 - [x] D — Hold new proposals on active Lemma issues tagged `warrant-hold`; failed refreshes fail closed and held runs can resume after a fresh clear result.
 - [!] Triage the 12 open Lemma issues (resolve fixed, dismiss stale/expected) — blocked on user approval: dismissed issues never reopen
 - [ ] Restart server from warrant/ and rehearse the demo
-- [ ] Record the 2-minute demo; add its link to README line 7; commit + push
+- [x] Record the 2-minute demo; link in README (https://youtu.be/T2u0wYKTFAw); README audited and rewritten against the code (session 005)
 - [ ] Submit the entry
 
 ## Summary
