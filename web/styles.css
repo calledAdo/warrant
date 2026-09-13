@@ -111,6 +111,20 @@ input::placeholder, textarea::placeholder { color: #636f7e; opacity: 1; }
 .customer-story h1 > span { color: #616f84; }
 .story-description { color: #646f7e; font-size: 14px; line-height: 1.8; max-width: 390px; margin-top: 23px; }
 .intro-integration { margin-top: 17px; }
+.flow-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--line); color: #536175; font-size: 10px; font-weight: 600; letter-spacing: .5px; }
+.flow-toolbar > span > span { font-weight: 400; letter-spacing: 0; }
+.flow-toolbar > div { display: flex; gap: 4px; }
+.flow-toolbar button { min-height: 44px; min-width: 44px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: #425977; font: inherit; cursor: pointer; }
+.flow-toolbar button:hover { background: #e9eff7; }
+.flow-toolbar button:focus-visible { outline: 2px solid #376fa9; outline-offset: 2px; }
+.flow-description { display: flex; gap: 13px; min-height: 98px; margin-top: -8px; }
+.flow-description h2 { font-size: 14px; font-weight: 600; color: var(--ink); line-height: 1.5; }
+.flow-description p { font-size: 12px; line-height: 1.7; color: #536175; margin-top: 4px; }
+.flow-number { flex-shrink: 0; padding-top: 3px; font-size: 10px; color: #5c6d83; font-variant-numeric: tabular-nums; }
+.intro-integration .integration-caption { align-items: flex-start; justify-content: flex-start; line-height: 1.6; padding-top: 12px; margin: 0; border-top: 1px solid var(--line); }
+.intro-integration .integration-caption svg { flex-shrink: 0; margin-top: 2px; }
+.hub-shell.hub-illustrated { box-shadow: 0 0 0 5px #e7f0fc80, 0 12px 30px #3346660b; }
+.hub-shell.hub-waiting { border-color: #c9ad74; box-shadow: 0 0 0 5px #f5ebd980; }
 .integration-visual { position: relative; width: 100%; aspect-ratio: 564 / 390; isolation: isolate; overflow: hidden; }
 .integration-dots { position: absolute; inset: 0; background-image: radial-gradient(#a7b3c34a .8px, transparent .8px); background-size: 17px 17px; mask-image: radial-gradient(ellipse at center, #000 20%, transparent 72%); z-index: -1; }
 .integration-lines { position: absolute; inset: 0; width: 100%; height: 100%; }

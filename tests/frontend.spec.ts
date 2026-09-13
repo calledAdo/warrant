@@ -7,6 +7,60 @@ async function openAdmin(page: Page) { await page.goto('/admin'); await expect(p
 async function noOverflow(page: Page) { expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true); }
 test.beforeEach(async ({ request }) => { await scenario(request); });
 
+test('landing workflow animates evidence, supports pause, and keeps the live map separate', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.goto('/');
+  const workflow = page.getByRole('region', { name: 'Illustrated refund workflow' });
+  await expect(workflow.getByRole('heading', { name: 'Read the billing evidence' })).toBeVisible();
+  const pulse = workflow.locator('.flow-pulse');
+  await expect(pulse).toHaveCount(1);
+  const offset = await pulse.evaluate(node => getComputedStyle(node).strokeDashoffset);
+  await expect.poll(() => pulse.evaluate(node => getComputedStyle(node).strokeDashoffset)).not.toBe(offset);
+  await page.clock.install();
+  await workflow.getByRole('button', { name: 'Pause workflow animation' }).click();
+  await expect(pulse).toHaveCount(0);
+  await page.clock.fastForward(20000);
+  await expect(workflow.getByRole('heading', { name: 'Read the billing evidence' })).toBeVisible();
+  await workflow.getByRole('button', { name: 'Play workflow animation' }).click();
+  await page.clock.runFor(3300);
+  await expect(workflow.getByRole('heading', { name: 'Look for a matching incident' })).toBeVisible();
+  await page.goto('/admin');
+  await expect(page.getByRole('heading', { name: 'Northwind Studio', exact: true })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Illustrated refund workflow' })).toHaveCount(0);
+  await expect(page.locator('.flow-pulse')).toHaveCount(0);
+  await expect(page.locator('.integration-waiting')).toContainText('Awaiting your decision');
+});
+
+test('reduced-motion walkthrough gates the illustrated refund behind approval and makes no API calls', async ({ page }) => {
+  const apiCalls: string[] = [];
+  page.on('request', request => { if (new URL(request.url()).pathname.startsWith('/api/')) apiCalls.push(request.url()); });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+  await page.clock.install();
+  const workflow = page.getByRole('region', { name: 'Illustrated refund workflow' });
+  const next = workflow.getByRole('button', { name: 'Next workflow step' });
+  await expect(workflow.locator('.flow-pulse')).toHaveCount(0);
+  await expect(workflow.getByRole('button', { name: /workflow animation/ })).toHaveCount(0);
+  await page.clock.fastForward(60000);
+  await expect(workflow.getByRole('heading', { name: 'Read the billing evidence' })).toBeVisible();
+  for (const title of ['Look for a matching incident', 'Check the finding against policy', 'Write a cited case', 'Send the proposal to the team', 'Wait for a person’s decision']) {
+    await next.click();
+    await expect(workflow.getByRole('heading', { name: title, exact: true })).toBeVisible();
+  }
+  await expect(workflow).toContainText('No refund can proceed without approval.');
+  await expect(workflow.locator('.integration-waiting')).toContainText('Human review');
+  await page.clock.fastForward(60000);
+  await expect(workflow.getByRole('heading', { name: 'Wait for a person’s decision' })).toBeVisible();
+  for (const title of ['If the reviewer approves', 'Recheck before moving money', 'Issue one full refund', 'Verify the refunded amount', 'Close the loop']) {
+    await next.click();
+    await expect(workflow.getByRole('heading', { name: title, exact: true })).toBeVisible();
+  }
+  await expect(workflow).toContainText('If evidence is insufficient or approval is declined, no money moves.');
+  await next.click();
+  await expect(workflow.getByRole('heading', { name: 'Read the billing evidence' })).toBeVisible();
+  expect(apiCalls).toEqual([]);
+});
+
 test('report validates, preserves input after failure, and tracks a successful retry', async ({ page, request }) => {
   await scenario(request, 'review', 'report'); await page.goto('/');
   await page.getByRole('button', { name: 'Submit report', exact: true }).click();

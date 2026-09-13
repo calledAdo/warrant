@@ -5,7 +5,7 @@ The two user-supplied 21st.dev prompts are the design foundation:
 - `~/Documents/prompts/clean-minimal-sign-in-prompt.md`: soft sky-to-white form surface, inset inputs, layered icon tile, rounded corners, charcoal primary button.
 - `~/Documents/prompts/integration-graph-prompt.md`: bordered integration tiles, dotted canvas, fine connector paths, a central mark, and motion restricted to active connections.
 
-The report form adapts the sign-in composition to the existing billing workflow. There are no pretend authentication buttons, passwords, social providers, or successful-demo alerts. The integration component shows Warrant's actual sources and handoffs, with step state supplied by the backend.
+The report form adapts the sign-in composition to the existing billing workflow. There are no pretend authentication buttons, passwords, social providers, or successful-demo alerts. The admin integration map takes its state from the backend. The landing map is labeled as an illustrated refund example: directional pulses show evidence entering Warrant, the case and Slack proposal leaving it, the human approval gate, the Stripe recheck/refund/verification, and final record updates. Evidence searches may repeat in any order; the illustration shows one supported path. Insufficient evidence and declined approval move no money.
 
 ## Foundation
 
@@ -21,7 +21,7 @@ React + TypeScript, Tailwind CSS, and shadcn-compatible `components/ui` modules.
 | Corners | 8–13 px for controls and workspace panels; 20–24 px for the customer form |
 | Borders | Fine cool-gray borders; dashed separators only for supporting context |
 | Icons | Hugeicons **free Stroke Rounded** set, 1.6 stroke width, shared wrapper |
-| Motion | Active graph paths only; respect `prefers-reduced-motion` |
+| Motion | Active graph paths; landing illustration has Pause/Play and Next controls, stops offscreen or in hidden tabs, and uses manual steps with `prefers-reduced-motion` |
 
 ## Layout and interaction
 
@@ -36,6 +36,8 @@ Approval dialogs show the exact amount and charge, request the reviewer email, a
 Lazyweb query: `customer support inbox`, desktop, 3 results, one per company. Returned coverage: strong, top similarity 0.58. The useful references were the inbox layouts visible in [Crisp](https://crisp.chat/en/) and [Kustomer's product tour](https://www.kustomer.com/product-tour/). These supported the queue/detail structure; the supplied 21st.dev components determine the visual language. The encyclopedia enquiry form was discarded as a poor visual match.
 
 Free components and documentation:
+
+Landing flow reference check: Lazyweb `integration workflow diagram`, desktop, three results; strong coverage, top similarity 0.583. [Port's workflow orchestrator](https://www.port.io/platform/workflow-orchestrator) supported labeled directional connections and a distinct approval gate. Customer.io and Relevance AI supplied adjacent workflow-builder references. The sequence itself is grounded in `src/graph.js`, not reference-product behavior.
 
 - [shadcn Vite setup](https://ui.shadcn.com/docs/installation/vite) and the Card structure included in the supplied prompt.
 - [Base UI Dialog](https://base-ui.com/react/components/dialog) and Button for accessible interaction primitives.
