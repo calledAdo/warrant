@@ -4,6 +4,64 @@ import { assembleCaseByRules } from './agent-rules.js';
 
 const POLICY = readFileSync(new URL('./policy.md', import.meta.url), 'utf8');
 
+export const REPORT_MAX = 2000;
+const DAY = 24 * 60 * 60;
+
+/**
+ * Customer text is untrusted input. Strip control characters, neutralise
+ * anything that could close our delimiter, and cap the length.
+ */
+export function sanitizeReport(text) {
+  return String(text ?? '')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .replace(/<\/?\s*customer_report\s*>/gi, '[tag removed]')
+    .slice(0, REPORT_MAX)
+    .trim();
+}
+
+/**
+ * The duplicate rule, enforced in code. Whatever the model concluded — and
+ * whatever the complaint told it — a refund is only proposed when the Stripe
+ * records themselves show a duplicate. A failing check downgrades the finding
+ * to a refusal and records why.
+ */
+export function enforceDuplicateRule(finding, charges, incidents) {
+  if (finding.verdict !== 'duplicate') return { finding, overridden: false };
+  const byId = new Map(charges.map((c) => [c.id, c]));
+  const r = byId.get(finding.charge_to_refund);
+  const k = byId.get(finding.duplicate_of);
+
+  const fail = (reason) => ({
+    overridden: true,
+    reason,
+    finding: {
+      ...finding,
+      verdict: 'insufficient_evidence',
+      charge_to_refund: null,
+      duplicate_of: null,
+      missing_evidence: `The records do not support a duplicate: ${reason}.`,
+      uncertainty: `The model proposed a refund, but a code check rejected it (${reason}).`,
+      model_verdict: 'duplicate',
+    },
+  });
+
+  if (!r || !k) return fail('a named charge is not on this account');
+  if (r.id === k.id) return fail('the refund and the kept charge are the same charge');
+  if (r.status !== 'succeeded' || k.status !== 'succeeded') return fail('both charges must have succeeded');
+  if (r.refunded || r.amount_refunded > 0) return fail('the charge to refund has already been refunded');
+  if (r.amount !== k.amount) return fail(`the amounts differ (${r.amount} vs ${k.amount})`);
+  if (r.currency !== k.currency) return fail('the currencies differ');
+  if (Math.abs(r.created - k.created) > DAY) return fail('the charges are more than 24 hours apart');
+  if (r.created < k.created) return fail('the proposed refund is the earlier charge, not the later one');
+
+  const sameDescription = (r.description || '') === (k.description || '');
+  const incident = incidents.some((i) => Math.abs(Date.parse(i.created_iso) / 1000 - r.created) <= DAY);
+  if (!sameDescription && !incident) {
+    return fail('the descriptions differ and no incident covers that window');
+  }
+  return { finding, overridden: false };
+}
+
 const SCHEMA = `Respond with a single JSON object:
 {
   "verdict": "duplicate" | "insufficient_evidence",
@@ -25,7 +83,9 @@ export async function assembleCase({ report, customer, charges, incidents }) {
     return rulesResult(charges, incidents);
   }
   const user = [
-    `Customer report: ${report}`,
+    '<customer_report>',
+    sanitizeReport(report),
+    '</customer_report>',
     '',
     `Customer: ${customer.name} (${customer.id})`,
     '',
@@ -58,20 +118,12 @@ export async function assembleCase({ report, customer, charges, incidents }) {
   if (!['duplicate', 'insufficient_evidence'].includes(p.verdict)) {
     throw new Error(`agent returned unknown verdict: ${p.verdict}`);
   }
-  if (p.verdict === 'duplicate') {
-    const ids = new Set(charges.map((c) => c.id));
-    if (!ids.has(p.charge_to_refund)) {
-      throw new Error(`agent named a charge not in evidence: ${p.charge_to_refund}`);
-    }
-    if (!ids.has(p.duplicate_of)) {
-      throw new Error(`agent named a duplicate_of not in evidence: ${p.duplicate_of}`);
-    }
-    if (p.charge_to_refund === p.duplicate_of) {
-      throw new Error('agent proposed refunding a charge as its own duplicate');
-    }
-  }
+  // Charge identity, amounts and timing are checked by enforceDuplicateRule,
+  // which downgrades to a refusal rather than crashing the run.
 
-  return { ...out, parsed: p };
+  const guard = enforceDuplicateRule(p, charges, incidents);
+  if (guard.overridden) console.warn(`  [agent] code check overrode model: ${guard.reason}`);
+  return { ...out, parsed: guard.finding, guard };
 }
 
 function rulesResult(charges, incidents, fellBack = false) {
@@ -99,7 +151,7 @@ export function caseBody({ report, customer, charges, incidents, finding }) {
 
   return [
     `## Report`,
-    report,
+    `> ${sanitizeReport(report).replace(/\n/g, '\n> ')}`,
     ``,
     `Customer: ${customer.name} (\`${customer.id}\`)`,
     ``,

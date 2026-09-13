@@ -14,7 +14,8 @@
     "fixtures": "node fixtures/build.mjs --all",
     "llm:ping": "node -e \"import('./src/llm.js').then(m=>m.ping().then(console.log))\"",
     "verify:llm": "node verify/llm-provider.mjs",
-    "lemma:policy": "node scripts/upload-policy.mjs"
+    "lemma:policy": "node scripts/upload-policy.mjs",
+    "verify:injection": "node verify/injection.mjs"
   },
   "dependencies": {
     "@slack/web-api": "^7.8.0",

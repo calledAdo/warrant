@@ -45,6 +45,9 @@ const server = createServer(async (req, res) => {
     if (p === '/api/complaints' && req.method === 'POST') {
       const { email, body } = await readBody(req);
       if (!email || !body) return json(res, 400, { error: 'Email and description are required.' });
+      if (String(body).length > 2000) {
+        return json(res, 400, { error: 'Please keep the description under 2,000 characters.' });
+      }
       const customer = await stripe.findCustomerByEmail(email).catch(() => null);
       if (!customer) {
         return json(res, 404, {

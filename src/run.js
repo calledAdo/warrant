@@ -73,6 +73,7 @@ class Run extends EventEmitter {
       traceId: this.traceId ?? null,
       finding: this.finding ?? null,
       llm: this.llm ?? null,
+      guard: this.guard ?? null,
       incidents: this.incidentsSeen ?? null,
       execTraceId: this.execTraceId ?? null,
       now: Date.now(),
@@ -141,6 +142,12 @@ export async function investigate(run) {
         output: JSON.stringify(f), usage: out.usage, durationMs: out.durationMs,
       });
       run.finding = f;
+      run.guard = out.guard ? { overridden: out.guard.overridden, reason: out.guard.reason ?? null } : null;
+      trace.recordSpan({
+        name: 'duplicate-rule-check',
+        input: { model_verdict: out.guard?.finding?.model_verdict ?? f.verdict },
+        output: run.guard ?? { overridden: false },
+      });
       run.llm = { model: out.model, ms: out.durationMs, inTok: out.usage?.inputTokens ?? 0, outTok: out.usage?.outputTokens ?? 0, rules: Boolean(out.rulesMode) };
       run.step('assemble', 'assemble case', f.verdict === 'duplicate' ? 'done' : 'refused',
         f.verdict === 'duplicate' ? f.grounds : f.missing_evidence);

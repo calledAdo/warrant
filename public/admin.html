@@ -454,7 +454,9 @@ function renderReasoning(s){
   const f=s.finding, l=s.llm;
   if(!f){ box.innerHTML='<p class="muted">Waiting for the model…</p>'; return; }
   const verdict=f.verdict==='duplicate'?'<span class="pill go">Duplicate</span>':'<span class="pill no">Not a duplicate</span>';
-  box.innerHTML=`<p style="margin:0 0 12px">${verdict}</p>
+  const g=s.guard?.overridden
+    ? `<p class="reason" style="color:var(--warn)"><strong style="color:var(--warn)">Code check overrode the model.</strong> It proposed a refund, but ${esc(s.guard.reason)}.</p>` : '';
+  box.innerHTML=`<p style="margin:0 0 12px">${verdict}</p>${g}
     <p class="reason">${esc(shortenIds(f.grounds))}</p>
     ${f.missing_evidence?`<p class="reason"><strong>Missing:</strong> ${esc(shortenIds(f.missing_evidence))}</p>`:''}
     ${f.uncertainty&&f.uncertainty!=='none'?`<p class="reason"><strong>Uncertain:</strong> ${esc(shortenIds(f.uncertainty))}</p>`:''}
