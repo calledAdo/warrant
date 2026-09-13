@@ -185,7 +185,11 @@ async function loadQueue(){
       <div class="l2"><span class="said">${esc(c.body)}</span><span>${ago(c.created_at)}</span></div>
     </button>`).join('');
   $('#queue').querySelectorAll('.qitem').forEach(b=>b.onclick=()=>select(b.dataset.id,list));
-  if(!selected){ const first=list.find(c=>c.status==='awaiting_approval')||list[0]; select(first.id,list); }
+  if(!selected){
+    const want=new URLSearchParams(location.search).get('run');
+    const target=(want&&list.find(c=>c.run_id===want))||list.find(c=>c.status==='awaiting_approval')||list[0];
+    select(target.id,list);
+  }
 }
 setInterval(loadQueue,2000); loadQueue();
 
@@ -411,14 +415,18 @@ function renderDecision(s){
       <p class="why" style="margin-top:6px">The agent found no duplicate and asked for nothing. No decision was needed and no money moved.</p></section>`;
   } else if(s.status==='declined'){
     h=`<section class="card bad" style="margin-top:14px"><p class="eyebrow">Declined</p>
-      <p class="why" style="margin-top:6px">You declined the proposed refund. The customer has been told no refund was issued.</p></section>`;
+      <p class="why" style="margin-top:6px">Declined by ${esc(s.approver||'the billing team')}${s.declineReason?` — “${esc(s.declineReason)}”`:''}. No money moved. The GitHub case and Slack message record the decision, and the customer has been told no refund was issued.</p></section>`;
   }
   box.innerHTML=h;
   if(h && motion) gsap.from(box.firstElementChild,{opacity:0,y:8,duration:.35,ease:'power2.out'});
 
   const ap=$('#approve'), dc=$('#decline'), rs=$('#resume');
   if(ap) ap.onclick=async e=>{ lock(e,'Approving…'); await fetch('/api/approve/'+runId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({approver:'ops@warrant.test',plan_id:s.plan.plan_id})}); };
-  if(dc) dc.onclick=async e=>{ lock(e,'Declining…'); await fetch('/api/decline/'+runId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({approver:'ops@warrant.test'})}); };
+  if(dc) dc.onclick=async e=>{
+    const reason=prompt('Why are you declining this refund? This is recorded on the case.','');
+    if(reason===null) return;
+    lock(e,'Declining…');
+    await fetch('/api/decline/'+runId,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({approver:'ops@warrant.test',reason})}); };
   if(rs) rs.onclick=async e=>{ lock(e,'Retrying…'); await fetch('/api/resume/'+runId,{method:'POST'}); };
   tickExpiry(s);
 }

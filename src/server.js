@@ -162,8 +162,12 @@ const server = createServer(async (req, res) => {
       const run = runs.get(dc[1]);
       if (!run?.plan) return json(res, 404, { error: 'no plan on that run' });
       if (run.status !== 'awaiting_approval') return json(res, 409, { error: 'not awaiting a decision' });
-      decline(run, approver, reason);
-      return json(res, 200, { ok: true });
+      json(res, 200, { ok: true });
+      decline(run, approver || 'ops@warrant.test', reason).catch((e) => {
+        run.pending = [{ step: 'decline', error: e.message }];
+        run.emit('update', run.snapshot());
+      });
+      return;
     }
 
     // Full run snapshot for the admin investigation view.

@@ -113,4 +113,25 @@ export async function updateApplied(channel, ts, plan, refund, approver) {
   return { ts: r.ts };
 }
 
+export async function updateDeclined(channel, ts, plan, approver, reason) {
+  const r = await call('chat.update', {
+    channel, ts,
+    text: `Refund declined: ${money(plan.amount, plan.currency)} — ${plan.customer_name}`,
+    blocks: [
+      { type: 'header', text: { type: 'plain_text', text: 'Refund declined — no money moved' } },
+      {
+        type: 'section',
+        fields: [
+          { type: 'mrkdwn', text: `*Customer*\n${plan.customer_name}` },
+          { type: 'mrkdwn', text: `*Proposed*\n${money(plan.amount, plan.currency)}` },
+          { type: 'mrkdwn', text: `*Declined by*\n${approver}` },
+          { type: 'mrkdwn', text: `*Reason*\n${reason || '_none given_'}` },
+        ],
+      },
+      { type: 'context', elements: [{ type: 'mrkdwn', text: `Case #${plan.case_id} · plan \`${plan.plan_id}\`` }] },
+    ],
+  });
+  return { ts: r.ts };
+}
+
 export const raw = call;

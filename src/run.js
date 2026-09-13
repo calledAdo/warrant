@@ -84,6 +84,7 @@ class Run extends EventEmitter {
       customerId: this.customerId,
       report: this.report,
       declineReason: this.declineReason ?? null,
+      approver: this.approver ?? null,
       caseUrl: this.caseUrl ?? null,
     };
   }
@@ -191,7 +192,7 @@ export async function investigate(run) {
       });
       run.plan = plan;
 
-      const approveUrl = `${process.env.PUBLIC_URL || 'http://localhost:3000'}/approve/${plan.plan_id}`;
+      const approveUrl = `${process.env.PUBLIC_URL || 'http://localhost:3000'}/admin?run=${run.id}`;
       const posted = await slack.postProposal(plan, approveUrl);
       trace.recordTool({ name: 'slack.post_proposal', input: { plan_id: plan.plan_id }, output: { ts: posted.ts } });
       run.slackRef = posted;
@@ -214,12 +215,46 @@ export function approve(run, approver = 'ops@warrant.test') {
   return getApproval(run.plan.plan_id);
 }
 
-export function decline(run, approver = 'ops@warrant.test', reason = '') {
+export async function decline(run, approver = 'ops@warrant.test', reason = '') {
   if (!run.plan) throw new Error('no plan to decline');
+  const plan = run.plan;
   run.approver = approver;
   run.declineReason = reason;
+  run.declinedAt = new Date().toISOString();
   run.status = 'declined';
   run.emit('update', run.snapshot());
+
+  // A human saying no is part of the audit trail: record it where the
+  // proposal was recorded. Journalled, so a retry never double-posts.
+  await lemma.trace(
+    { name: 'warrant.decline', input: { plan_id: plan.plan_id, approver, reason }, threadId: `case-${run.customerId}` },
+    async (trace) => {
+      const steps = [
+        ['decline_case', () => github.comment(plan.case_id,
+          `**Refund declined** by ${approver} at ${run.declinedAt}.\n\n` +
+          `- proposed: full refund of \`${plan.charge_id}\` (${(plan.amount / 100).toFixed(2)} ${plan.currency.toUpperCase()})\n` +
+          `- plan \`${plan.plan_id}\`\n` +
+          `- reason: ${reason || '_none given_'}\n\nNo money moved.`)],
+        ['decline_slack', () => run.slackRef
+          ? slack.updateDeclined(run.slackRef.channel, run.slackRef.ts, plan, approver, reason)
+          : Promise.resolve(null)],
+      ];
+      run.pending = [];
+      for (const [key, fn] of steps) {
+        try {
+          await withJournal(`${plan.plan_id}:${key}`, { planId: plan.plan_id, step: key }, () => {
+            const t = trace.startTool({ name: key, input: { plan_id: plan.plan_id } });
+            return fn().then((v) => { t.end({ output: v }); return v; }, (e) => { t.end({ error: e }); throw e; });
+          });
+        } catch (e) {
+          run.pending.push({ step: key, error: e.message });
+        }
+      }
+      run.emit('update', run.snapshot());
+      return { status: 'declined', pending: run.pending.map((p) => p.step) };
+    }
+  );
+  return run.snapshot();
 }
 
 const EXEC_STEPS = [
