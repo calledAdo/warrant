@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0B0F13">
+<title>Billing Support — Warrant</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/app.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<style>
+  main{padding-block:44px 90px}
+  .hero{margin-bottom:34px}
+  .examples{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  .examples button{font-size:12.5px;padding:6px 11px;border-radius:20px;font-weight:500}
+
+  .rail{display:grid;gap:0;margin:6px 0 4px}
+  .stage{display:grid;grid-template-columns:26px minmax(0,1fr);gap:14px;padding-bottom:22px;position:relative}
+  .stage:last-child{padding-bottom:0}
+  .stage .dot{width:11px;height:11px;border-radius:50%;background:var(--line2);margin:6px auto 0;
+    position:relative;z-index:2;transition:background-color .3s ease,box-shadow .3s ease}
+  .stage::before{content:"";position:absolute;left:12.5px;top:14px;bottom:-6px;width:1px;background:var(--line2)}
+  .stage:last-child::before{display:none}
+  .stage.done .dot{background:var(--read)}
+  .stage.now .dot{background:var(--read);box-shadow:0 0 0 5px rgba(78,168,222,.18)}
+  .stage.done.final .dot,.stage.now.final .dot{background:var(--money);box-shadow:0 0 0 5px rgba(52,211,153,.16)}
+  .stage h3{margin:0;font-size:14.5px;color:var(--ink3)}
+  .stage.done h3,.stage.now h3{color:var(--ink)}
+  .stage p{margin:3px 0 0;font-size:13.5px;color:var(--ink3)}
+  .stage.now p{color:var(--ink2)}
+
+  .ref{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:4px}
+  .ref .code{font-family:"IBM Plex Mono",monospace;font-size:20px;letter-spacing:.04em;color:var(--ink)}
+  .outcome{margin-top:20px;padding:16px 18px;border-radius:var(--r);border:1px solid}
+  .outcome.refund{border-color:#14503A;background:#0A2419}
+  .outcome.none{border-color:#3B2A5C;background:#160F26}
+  .outcome .amt{font-family:"IBM Plex Mono",monospace;font-size:26px;font-weight:600;
+    color:var(--money);font-variant-numeric:tabular-nums}
+  .outcome p{margin:6px 0 0;font-size:14px;color:var(--ink2)}
+  .quote{border-left:2px solid var(--line2);padding-left:14px;color:var(--ink2);font-size:14px;margin:0}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <a class="brand" href="/"><b translate="no">Warrant</b><span>Billing Support</span></a>
+  <span class="spacer"></span>
+  <a class="navlink" href="/" aria-current="page">Report a problem</a>
+  <a class="navlink" href="/admin">Billing team</a>
+</div></header>
+
+<main class="wrap narrow">
+
+  <section id="form-view">
+    <div class="hero">
+      <p class="eyebrow">Billing support</p>
+      <h1>Something wrong with a charge?</h1>
+      <p class="lede">Tell us what happened. We check your billing history against our own incident
+        records and come back with a decision — usually within a minute.</p>
+    </div>
+
+    <form id="form" class="card" novalidate>
+      <div class="field">
+        <label for="email">Email on the account</label>
+        <input id="email" name="email" type="email" autocomplete="email" spellcheck="false"
+               inputmode="email" placeholder="you@company.com…" required>
+        <div class="examples" id="examples"></div>
+      </div>
+      <div class="field">
+        <label for="body">What happened?</label>
+        <textarea id="body" name="body" autocomplete="off"
+          placeholder="We were billed twice for September…" required>We were billed twice for September.</textarea>
+      </div>
+      <p class="err" id="formerr" role="alert" hidden></p>
+      <button class="primary" type="submit" id="submit">Submit Report</button>
+    </form>
+  </section>
+
+  <section id="track-view" hidden>
+    <div class="hero">
+      <p class="eyebrow">Your report</p>
+      <div class="ref">
+        <span class="code" id="ref" translate="no">—</span>
+        <span class="pill" id="stagepill">Received</span>
+      </div>
+      <p class="lede" id="who"></p>
+    </div>
+
+    <div class="card">
+      <h2>Progress</h2>
+      <div class="rail" id="rail"></div>
+      <div id="outcome"></div>
+    </div>
+
+    <div class="card">
+      <h3>What you told us</h3>
+      <p class="quote" id="said"></p>
+    </div>
+
+    <p style="margin-top:18px"><button class="ghost" id="again">Report Another Problem</button></p>
+  </section>
+
+  <p class="vh" id="live" role="status" aria-live="polite"></p>
+</main>
+
+<script>
+const $ = (s)=>document.querySelector(s);
+const esc = (s)=>String(s??'').replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+const money = (c,cur)=>new Intl.NumberFormat(navigator.language||'en-US',
+  {style:'currency',currency:(cur||'usd').toUpperCase()}).format(c/100);
+
+const STAGES = [
+  ['Received','We have your report.'],
+  ['Investigating','Checking your billing history and our incident records.'],
+  ['Under Review','A member of our billing team is reviewing the proposed correction.'],
+  ['Resolved','Done.'],
+];
+
+let id=null, poll=null, lastStage=0;
+
+fetch('/api/fixtures').then(r=>r.json()).then(f=>{
+  const box=$('#examples'); box.textContent='';
+  const seen=new Set();
+  (f.scenarios||[]).forEach(s=>{
+    const email = s.scenario==='s1' ? 'billing@northwind.test' : 'ap@harbor.test';
+    if(seen.has(email)) return; seen.add(email);
+    const b=document.createElement('button');
+    b.type='button'; b.className='ghost'; b.textContent=email;
+    b.onclick=()=>{ $('#email').value=email; $('#email').focus(); };
+    box.appendChild(b);
+  });
+}).catch(()=>{});
+
+$('#form').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const btn=$('#submit'), err=$('#formerr');
+  err.hidden=true; btn.disabled=true; btn.textContent='Submitting…';
+  const r = await fetch('/api/complaints',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({email:$('#email').value,body:$('#body').value})}).then(x=>x.json());
+  btn.disabled=false; btn.textContent='Submit Report';
+  if(r.error){ err.textContent=r.error; err.hidden=false; $('#email').focus(); return; }
+  id=r.id;
+  history.replaceState({},'','?ref='+id);
+  showTracking();
+});
+
+function showTracking(){
+  $('#form-view').hidden=true;
+  $('#track-view').hidden=false;
+  $('#ref').textContent=id;
+  gsap.from('#track-view',{opacity:0,y:10,duration:.4,ease:'power2.out'});
+  tick();
+  clearInterval(poll); poll=setInterval(tick,1500);
+}
+
+async function tick(){
+  const d = await fetch('/api/complaints/'+id).then(r=>r.json()).catch(()=>null);
+  if(!d || d.error) return;
+  $('#said').textContent = d.body;
+  $('#who').textContent = d.customer_name ? 'For '+d.customer_name : '';
+
+  const kind = d.outcome?.kind;
+  const pill = d.stage>=4 ? (kind==='refund'?'go':'no') : (d.stage===3?'wait':'run');
+  $('#stagepill').className='pill '+pill;
+  $('#stagepill').textContent=d.stage_label;
+
+  $('#rail').innerHTML = STAGES.map((s,i)=>{
+    const n=i+1;
+    const cls = n<d.stage?'done':n===d.stage?'now':'';
+    const fin = n===4?' final':'';
+    const note = n===d.stage ? d.note : s[1];
+    return `<div class="stage ${cls}${fin}"><span class="dot"></span>
+      <div><h3>${esc(n===4?d.stage_label:s[0])}</h3><p>${esc(note)}</p></div></div>`;
+  }).join('');
+
+  if(d.stage!==lastStage){
+    lastStage=d.stage;
+    $('#live').textContent=d.stage_label+'. '+d.note;
+    gsap.fromTo('.stage.now .dot',{scale:.4},{scale:1,duration:.5,ease:'back.out(2)'});
+  }
+
+  const o=$('#outcome');
+  if(d.outcome && !o.dataset.done){
+    o.dataset.done='1';
+    o.innerHTML = kind==='refund'
+      ? `<div class="outcome refund"><span class="amt">${money(d.outcome.amount,d.outcome.currency)}</span>
+         <p>${esc(d.outcome.text)} It should reach your statement within 5–10 business days.</p></div>`
+      : `<div class="outcome none"><strong>No changes made</strong><p>${esc(d.outcome.text)}
+         If you still think something is wrong, reply to our email and a person will take another look.</p></div>`;
+    gsap.from(o.firstElementChild,{opacity:0,y:12,duration:.5,ease:'power2.out'});
+    clearInterval(poll);
+  }
+}
+
+$('#again').onclick=()=>{ location.href='/'; };
+
+const ref=new URLSearchParams(location.search).get('ref');
+if(ref){ id=ref; showTracking(); }
+</script>
+</body>
+</html>

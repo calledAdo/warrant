@@ -1,0 +1,25 @@
+{
+  "name": "warrant",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "An agent that has to earn the right to move money.",
+  "scripts": {
+    "verify": "node verify/run-all.mjs",
+    "verify:stripe": "node verify/stripe-refund.mjs",
+    "verify:github": "node verify/github-issue.mjs",
+    "verify:slack": "node verify/slack-post.mjs",
+    "verify:lemma": "node verify/lemma-trace.mjs",
+    "start": "node src/server.js",
+    "fixtures": "node fixtures/build.mjs --all",
+    "llm:ping": "node -e \"import('./src/llm.js').then(m=>m.ping().then(console.log))\"",
+    "verify:llm": "node verify/llm-provider.mjs",
+    "lemma:policy": "node scripts/upload-policy.mjs"
+  },
+  "dependencies": {
+    "@slack/web-api": "^7.8.0",
+    "@uselemma/tracing": "^7.12.0",
+    "dotenv": "^16.4.7",
+    "stripe": "^17.5.0"
+  }
+}
