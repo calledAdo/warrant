@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lakeside — Checkout (simulated)</title>
+<!--
+  DEMO PROP — not part of the Warrant product.
+
+  A scripted re-enactment of the incident Warrant investigates: a billing retry
+  that charges the same subscription twice. No payment provider is contacted,
+  no card details are collected, and every identifier here is invented. It runs
+  the cold open of the demo, ending on the handoff to the report form.
+
+  Presenter controls:  Space / R replays,  N skips a beat.
+  Handoff target is WARRANT_URL below.
+-->
+<style>
+  :root {
+    --ink: #252c37; --muted: #687281; --subtle: #657183;
+    --line: #e6e9ef; --line-strong: #d5dce5;
+    --blue: #386ca9; --blue-wash: #eef5fc;
+    --amber: #8a6a20; --amber-line: #dfcda7; --amber-wash: #fffcf5;
+    --green: #2f6d4f; --green-line: #cae1d5;
+  }
+  * { box-sizing: border-box; }
+  /* Class-level `display` beats the UA [hidden] rule, so state it plainly. */
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; min-height: 100%;
+    font-family: 'Instrument Sans Variable', 'Instrument Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    color: var(--ink);
+    background:
+      radial-gradient(ellipse 900px 520px at 50% -8%, #eaf1fa 0%, transparent 70%),
+      #fafbfc;
+    display: grid; place-items: center; padding: 40px 24px;
+    text-rendering: optimizeLegibility; font-synthesis: none;
+  }
+  h1, h2, h3, p { margin: 0; }
+  button { font: inherit; cursor: pointer; }
+  svg { width: 20px; height: 20px; flex-shrink: 0; }
+
+  .stage { width: 100%; max-width: 1000px; display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; }
+  @media (max-width: 900px) { .stage { grid-template-columns: 1fr; max-width: 460px; } }
+
+  .sim-flag {
+    position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 7px;
+    padding: 6px 13px; border: 1px dashed var(--line-strong); border-radius: 999px;
+    background: #ffffffcc; backdrop-filter: blur(6px);
+    font-size: 10px; font-weight: 650; letter-spacing: .6px; color: var(--subtle);
+  }
+  .sim-flag span.dot { width: 6px; height: 6px; border-radius: 50%; background: #c9ad74; }
+
+  /* ---------------------------------------------------------- checkout card */
+  .checkout {
+    background: linear-gradient(#f7fbff, #fff 42%);
+    border: 1px solid var(--line); border-radius: 24px; padding: 30px;
+    box-shadow: 0 2px 3px #1b294006, 0 18px 44px #1b29400a;
+  }
+  .vendor { display: flex; align-items: center; gap: 11px; margin-bottom: 24px; }
+  .vendor-mark {
+    width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
+    background: var(--ink); color: #fff; font-weight: 700; font-size: 17px; letter-spacing: -.5px;
+  }
+  .vendor strong { display: block; font-size: 15px; letter-spacing: -.2px; }
+  .vendor span { font-size: 12px; color: var(--muted); }
+
+  .line-item { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: 15px; border-bottom: 1px dashed var(--line-strong); }
+  .line-item div h2 { font-size: 14px; font-weight: 600; }
+  .line-item div p { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .line-item strong { font-size: 15px; font-variant-numeric: tabular-nums; }
+  .total { display: flex; justify-content: space-between; align-items: baseline; padding: 15px 0 22px; }
+  .total span { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: .3px; }
+  .total strong { font-size: 30px; letter-spacing: -1.1px; font-variant-numeric: tabular-nums; }
+
+  .field { margin-bottom: 13px; }
+  .field label { display: block; font-size: 11px; font-weight: 650; color: var(--subtle); letter-spacing: .3px; margin-bottom: 6px; }
+  .inset {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 14px; height: 46px; border-radius: 12px;
+    border: 1px solid var(--line); background: #f7f9fc;
+    box-shadow: inset 0 1px 2px #1b29400a;
+    font-size: 13px; color: #46505f;
+  }
+  .inset svg { color: #8c97a6; width: 17px; height: 17px; }
+  .inset code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; letter-spacing: .4px; }
+  .test-tag { margin-left: auto; font-size: 9.5px; font-weight: 700; letter-spacing: .5px; color: var(--subtle); border: 1px solid var(--line-strong); border-radius: 5px; padding: 2px 6px; }
+
+  .pay {
+    width: 100%; height: 52px; margin-top: 9px;
+    display: flex; align-items: center; justify-content: center; gap: 9px;
+    border: 0; border-radius: 13px; background: var(--ink); color: #fff;
+    font-size: 14px; font-weight: 600; letter-spacing: -.1px;
+    transition: background .18s ease, transform .12s ease;
+  }
+  .pay:hover:not(:disabled) { background: #313a47; }
+  .pay:active:not(:disabled) { transform: scale(.988); }
+  .pay:disabled { background: #56606f; cursor: default; }
+  .pay.is-done { background: #2f6d4f; }
+
+  .pay-note { margin-top: 13px; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 11px; color: var(--muted); }
+  .pay-note svg { width: 13px; height: 13px; }
+
+  .retry {
+    margin-top: 15px; display: flex; align-items: flex-start; gap: 9px;
+    padding: 11px 13px; border-radius: 11px;
+    border: 1px solid var(--amber-line); background: var(--amber-wash); color: var(--amber);
+    font-size: 12px; line-height: 1.5;
+  }
+  .retry svg { width: 15px; height: 15px; margin-top: 1px; }
+  .retry code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+
+  /* ------------------------------------------------------------- statement */
+  .statement { border: 1px solid var(--line); border-radius: 20px; background: #fff; box-shadow: 0 2px 3px #1b294005, 0 12px 32px #1b294008; overflow: hidden; }
+  .statement-head { display: flex; align-items: center; justify-content: space-between; padding: 17px 21px; border-bottom: 1px solid var(--line); }
+  .statement-head h3 { font-size: 13px; font-weight: 650; letter-spacing: -.1px; }
+  .statement-head span { font-size: 10px; font-weight: 650; letter-spacing: .5px; color: var(--subtle); }
+  .rows { padding: 7px; min-height: 188px; }
+
+  .row {
+    display: grid; grid-template-columns: 34px 1fr auto; gap: 12px; align-items: center;
+    padding: 13px; border-radius: 13px; border: 1px solid transparent;
+    animation: land .42s cubic-bezier(.22,.9,.3,1) both;
+  }
+  .row + .row { margin-top: 3px; }
+  .row-icon { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; border: 1px solid var(--line); background: #fbfcfe; color: #5d6e84; }
+  .row-icon svg { width: 16px; height: 16px; }
+  .row-main code { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: #46505f; }
+  .row-main small { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .row-amt { text-align: right; }
+  .row-amt strong { display: block; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .row-amt em { display: block; font-style: normal; font-size: 10px; font-weight: 650; letter-spacing: .3px; color: var(--green); margin-top: 2px; }
+
+  /* The statement cannot know this is a duplicate — that is Warrant's job.
+     A ring draws the eye without the statement claiming a verdict. */
+  .row.is-dupe { border-color: var(--amber-line); background: var(--amber-wash); }
+  .row.is-dupe .row-icon { border-color: var(--amber-line); background: #fff; }
+
+  .rows-empty { display: grid; place-items: center; height: 174px; gap: 9px; color: #9aa4b2; font-size: 12px; }
+  .rows-empty svg { width: 22px; height: 22px; }
+
+  /* -------------------------------------------------------------- callout */
+  .callout { margin-top: 20px; opacity: 0; transform: translateY(9px); transition: opacity .45s ease, transform .45s cubic-bezier(.22,.9,.3,1); }
+  .callout.is-in { opacity: 1; transform: none; }
+  .callout h2 { font-size: 21px; letter-spacing: -.6px; line-height: 1.25; }
+  .callout h2 span { color: #616f84; }
+  .callout p { font-size: 13px; line-height: 1.65; color: var(--subtle); margin-top: 9px; max-width: 40ch; }
+  .handoff {
+    margin-top: 17px; display: inline-flex; align-items: center; gap: 9px;
+    height: 46px; padding: 0 19px; border-radius: 12px;
+    background: var(--ink); color: #fff; font-size: 13.5px; font-weight: 600;
+    text-decoration: none; transition: background .18s ease, transform .12s ease;
+  }
+  .handoff:hover { background: #313a47; }
+  .handoff:active { transform: scale(.988); }
+
+  .replay {
+    position: fixed; bottom: 20px; right: 20px;
+    display: flex; align-items: center; gap: 7px;
+    height: 38px; padding: 0 14px; border-radius: 10px;
+    border: 1px solid var(--line-strong); background: #fffffff2;
+    font-size: 12px; font-weight: 600; color: #425977;
+  }
+  .replay:hover { background: #eef3f9; }
+  .replay svg { width: 14px; height: 14px; }
+
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes land { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .row { animation: none; }
+    .callout { transition: none; }
+    .spin { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="sim-flag"><span class="dot"></span>SIMULATED CHECKOUT · NO PAYMENT IS PROCESSED</div>
+
+<div class="stage">
+
+  <!-- ------------------------------------------------------- the checkout -->
+  <section class="checkout" aria-label="Simulated checkout">
+    <div class="vendor">
+      <div class="vendor-mark">L</div>
+      <div><strong>Lakeside</strong><span>Subscription renewal</span></div>
+    </div>
+
+    <div class="line-item">
+      <div><h2>Pro plan</h2><p>Monthly subscription · renews 13 Oct</p></div>
+      <strong>$129.00</strong>
+    </div>
+    <div class="total"><span>TOTAL DUE</span><strong>$129.00</strong></div>
+
+    <div class="field">
+      <label for="card">Card</label>
+      <div class="inset" id="card">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M2 10h20M6 15h3"/></svg>
+        <code>4242 4242 4242 4242</code>
+        <span class="test-tag">TEST CARD</span>
+      </div>
+    </div>
+
+    <button class="pay" id="pay">
+      <span id="pay-label">Pay $129.00</span>
+    </button>
+
+    <p class="pay-note" id="pay-note">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/></svg>
+      You can cancel any time.
+    </p>
+
+    <div class="retry" id="retry" hidden>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M20 11a8 8 0 10-2.3 5.7M20 5v6h-6"/></svg>
+      <div>Gateway timed out. Retrying the charge…<br /><code>billing-worker · attempt 2 of 3</code></div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------ the statement -->
+  <div>
+    <section class="statement" aria-label="Simulated billing statement">
+      <div class="statement-head"><h3>Your billing history</h3><span>LAKESIDE</span></div>
+      <div class="rows" id="rows">
+        <div class="rows-empty" id="empty">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M5 4h14v16l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 9h6M9 13h4"/></svg>
+          No charges yet
+        </div>
+      </div>
+    </section>
+
+    <div class="callout" id="callout">
+      <h2>Two charges.<br /><span>One subscription.</span></h2>
+      <p>A retry in the billing worker succeeded twice. Nobody at Lakeside knows yet — the customer is about to find out from their statement.</p>
+      <a class="handoff" id="handoff" href="#">
+        Report this charge
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </a>
+    </div>
+  </div>
+
+</div>
+
+<button class="replay" id="replay">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 13a8 8 0 102.3-5.7M4 7v6h6"/></svg>
+  Replay
+</button>
+
+<script>
+// Served at /simulation, so the report form is one hop up on the same origin.
+const WARRANT_URL = '/';
+const CUSTOMER_EMAIL = 'finance@lakeside.test';
+
+const CHARGES = [
+  { id: 'ch_3PmKq2Lx8f21', at: '10:24 AM', dupe: false },
+  { id: 'ch_3PmKq7Rn9c04', at: '10:25 AM', dupe: true },
+];
+
+const el = (id) => document.getElementById(id);
+const pay = el('pay'), label = el('pay-label'), note = el('pay-note');
+const retry = el('retry'), rows = el('rows'), callout = el('callout');
+
+const SPINNER = '<svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3a9 9 0 019 9" /></svg>';
+const TICK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 7"/></svg>';
+const CARD = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="2" y="5" width="20" height="14" rx="3"/><path d="M2 10h20M6 15h3"/></svg>';
+
+el('handoff').href = WARRANT_URL;
+
+let timers = [];
+const at = (ms, fn) => timers.push(setTimeout(fn, ms));
+const clear = () => { timers.forEach(clearTimeout); timers = []; };
+
+function addCharge(c) {
+  el('empty')?.remove();
+  const row = document.createElement('div');
+  row.className = 'row' + (c.dupe ? ' is-dupe' : '');
+  row.innerHTML =
+    '<div class="row-icon">' + CARD + '</div>' +
+    '<div class="row-main"><code>' + c.id + '</code><small>Pro plan · Monthly subscription · Sep 13, ' + c.at + '</small></div>' +
+    '<div class="row-amt"><strong>$129.00</strong><em>SUCCEEDED</em></div>';
+  rows.appendChild(row);
+}
+
+function reset() {
+  clear();
+  pay.disabled = false; pay.className = 'pay';
+  label.textContent = 'Pay $129.00';
+  note.hidden = false; retry.hidden = true;
+  rows.innerHTML = '<div class="rows-empty" id="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M5 4h14v16l-3-2-2 2-2-2-2 2-2-2-3 2z"/><path d="M9 9h6M9 13h4"/></svg>No charges yet</div>';
+  callout.classList.remove('is-in');
+}
+
+function run() {
+  if (pay.disabled) return;
+  clear();
+  pay.disabled = true;
+  label.innerHTML = SPINNER + 'Authorizing…';
+  note.hidden = true;
+
+  at(1500, () => { retry.hidden = false; });                 // the incident
+  at(2900, () => { addCharge(CHARGES[0]); });                // first charge lands
+  at(3800, () => {
+    retry.hidden = true;
+    pay.className = 'pay is-done';
+    label.innerHTML = TICK + 'Payment successful';
+  });
+  at(5100, () => { addCharge(CHARGES[1]); });                // …and again
+  at(6100, () => { callout.classList.add('is-in'); });
+}
+
+pay.addEventListener('click', run);
+el('replay').addEventListener('click', () => { reset(); at(260, run); });
+addEventListener('keydown', (e) => {
+  if (e.key === ' ' || e.key.toLowerCase() === 'r') { e.preventDefault(); reset(); at(200, run); }
+});
+</script>
+</body>
+</html>
