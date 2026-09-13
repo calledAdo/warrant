@@ -6,7 +6,8 @@
  */
 import 'dotenv/config';
 import { readFileSync } from 'node:fs';
-import { createRun, investigate, approve, execute, resume } from '../src/run.js';
+import { execFileSync } from 'node:child_process';
+import { createRun, investigate, approve, execute, resume, replay } from '../src/run.js';
 import { reset, opsForPlan } from '../src/journal.js';
 import * as stripe from '../src/adapters/stripe.js';
 
@@ -75,8 +76,12 @@ async function s3(s1run) {
   if (!s1run) return fail('skipped, S1 produced no run');
   const before = await stripe.getCharge(s1run.plan.charge_id);
 
-  await execute(s1run);            // full re-execution of an approved plan
+  // Fork the LangGraph thread from the checkpoint taken just before the refund
+  // node and run forward again. The graph re-enters refund; the journal must
+  // stop it from moving money a second time.
+  await replay(s1run);
   const after = await stripe.getCharge(s1run.plan.charge_id);
+  s1run.engine?.checkpoints ? pass(`replayed from LangGraph history (${s1run.engine.checkpoints} checkpoints)`) : info('no checkpoint count');
 
   after.amount_refunded === before.amount_refunded
     ? pass(`amount_refunded unchanged at ${after.amount_refunded}`)
@@ -88,7 +93,7 @@ async function s3(s1run) {
   const refundStep = s1run.steps.find((s) => s.key === 'refund');
   /already done/.test(refundStep?.detail || '')
     ? pass(`executor reported: "${refundStep.detail}"`)
-    : info(`refund step detail: ${refundStep?.detail}`);
+    : fail(`replay did not hit the journal — refund detail: ${refundStep?.detail}`);
 }
 
 async function s4() {
@@ -98,10 +103,12 @@ async function s4() {
     info('  arga twin-runs create --twins slack --ttl 10 --scenario-prompt "..." --wait --json');
     return;
   }
-  const f = get('s1');
+  // S1 already refunded its duplicate, so S4 needs a fresh one.
+  execFileSync('node', ['fixtures/build.mjs', '--scenario', 's1'], { stdio: 'ignore' });
+  const f = JSON.parse(readFileSync('fixtures/current.json', 'utf8')).scenarios.find((x) => x.scenario === 's1');
   const run = createRun(f.report, f.customer_id);
   await investigate(run);
-  if (!run.plan) return fail('no plan for S4');
+  if (!run.plan) return fail(`no plan for S4 — status ${run.status}, missing="${run.finding?.missing_evidence}"`);
   approve(run);
 
   // Arm the NATIVE Arga rate limit by consuming its single allowed call.

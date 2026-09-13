@@ -15,9 +15,12 @@
     "llm:ping": "node -e \"import('./src/llm.js').then(m=>m.ping().then(console.log))\"",
     "verify:llm": "node verify/llm-provider.mjs",
     "lemma:policy": "node scripts/upload-policy.mjs",
-    "verify:injection": "node verify/injection.mjs"
+    "verify:injection": "node verify/injection.mjs",
+    "graph": "node scripts/print-graph.mjs"
   },
   "dependencies": {
+    "@langchain/core": "^1.2.11",
+    "@langchain/langgraph": "^1.4.15",
     "@slack/web-api": "^7.8.0",
     "@uselemma/tracing": "^7.12.0",
     "dotenv": "^16.4.7",

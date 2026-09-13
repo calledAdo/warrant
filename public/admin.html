@@ -123,6 +123,7 @@
 <header><div class="wrap">
   <a class="brand" href="/admin"><b translate="no">Warrant</b><span>Billing Team</span></a>
   <span class="spacer"></span>
+  <span class="tag on" id="t-engine">langgraph</span>
   <span class="tag" id="t-model">model</span>
   <span class="tag" id="t-slack">slack</span>
   <span class="tag" id="t-lemma">lemma</span>
@@ -375,7 +376,7 @@ function update(){
   const s=snap; if(!s) return;
   paintGraph();
   $('#headpill').innerHTML=pill(s.status);
-  const sig=[s.status,!!s.finding,s.caseNumber,(s.pending||[]).length,
+  const sig=[s.status,!!s.finding,s.caseNumber,(s.pending||[]).length,s.engine?.checkpoints,
     (s.steps||[]).map(x=>x.state).join('')].join('|');
   if(sig===lastSig){ tickExpiry(s); return; }
   lastSig=sig;
@@ -496,6 +497,7 @@ async function renderRefs(s){
   const items=[];
   if(s.caseNumber&&window.__repo) items.push(`<a href="https://github.com/${window.__repo}/issues/${s.caseNumber}" target="_blank" rel="noopener">GitHub case file<span>#${s.caseNumber} ↗</span></a>`);
   items.push(`<a href="https://app.slack.com" target="_blank" rel="noopener">Slack thread<span>#billing-approvals ↗</span></a>`);
+  if(s.engine) items.push(`<div class="pending" style="border-style:solid">LangGraph thread <span class="id" translate="no">${esc(s.id)}</span> · ${s.engine.checkpoints||0} checkpoints${s.engine.interrupted?' · paused at human_review':''}</div>`);
   items.push(`<div id="lemmarefs"><div class="pending">Lemma traces indexing…</div></div>`);
   box.innerHTML=items.join('');
   resolveTraces();

@@ -92,6 +92,7 @@ const server = createServer(async (req, res) => {
         twin: Boolean(process.env.SLACK_API_URL),
         slackApi: process.env.SLACK_API_URL || 'https://slack.com',
         repo: process.env.GITHUB_REPO,
+        engine: 'langgraph',
         model: process.env.LLM_MODE === 'rules' ? 'rules engine' : (process.env.OPENAI_MODEL || 'rules engine'),
       });
     }
