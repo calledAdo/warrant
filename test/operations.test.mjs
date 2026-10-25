@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 
 const dir = mkdtempSync(join(tmpdir(), 'warrant-operations-'));
 process.env.WARRANT_DB = join(dir, 'db.sqlite');
+process.env.WARRANT_HMEM_DIR = join(dir, 'hmem');
 
 const { db } = await import('../src/storage.js');
 await import('../src/complaints.js');

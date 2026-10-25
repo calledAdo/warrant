@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 const dir = mkdtempSync(join(tmpdir(), 'warrant-demo-'));
 process.env.WARRANT_DB = join(dir, 'demo.sqlite');
 process.env.WARRANT_PROVIDER = 'sqlite';
+process.env.WARRANT_HMEM_DIR = join(dir, 'hmem');
 process.env.LLM_MODE = 'rules';
 process.env.LEMMA_API_KEY = '';
 process.env.LEMMA_PROJECT_ID = '';

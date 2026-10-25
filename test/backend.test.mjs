@@ -1,4 +1,4 @@
-import { test, after } from 'node:test';
+import { test, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 const dir=mkdtempSync(join(tmpdir(),'warrant-backend-'));
 process.env.WARRANT_DB=join(dir,'db.sqlite');
 process.env.WARRANT_TEST_PROVIDER=join(dir,'provider.json');
+process.env.WARRANT_HMEM_DIR=join(dir,'hmem');
 process.env.LLM_MODE='rules'; process.env.OPENAI_API_KEY='offline';
 process.env.LEMMA_API_KEY=''; process.env.LEMMA_PROJECT_ID='';
 writeFileSync(process.env.WARRANT_TEST_PROVIDER,JSON.stringify({charges:[],calls:[]}));
@@ -18,7 +19,9 @@ const { graph } = await import('../src/graph.js');
 const { getOp, refundKey, withJournal, reconcileOperation } = await import('../src/journal.js');
 const { customerView, create: createComplaint, attachRun } = await import('../src/complaints.js');
 const { isExpired } = await import('../src/plan.js');
+const { resetPrecedentMemory } = await import('../src/hmem-precedent.js');
 after(()=>{db.close();rmSync(dir,{recursive:true,force:true});});
+beforeEach(() => { resetPrecedentMemory(); });
 
 const investigation = async customer => { const r=createRun('Please check the duplicate.',customer); await investigate(r); return r; };
 test('rules mode performs no model calls; initial writes journalled; refund and replay occur once', async()=>{

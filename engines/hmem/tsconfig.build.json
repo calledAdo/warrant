@@ -1,0 +1,20 @@
+{
+  // Runtime build: the engine compiles to plain Node modules (kept in git so
+  // offline tests and the sample demo run without tooling). Conformance runs
+  // against the TypeScript sources via tsx (engine:conformance).
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": false,
+    "rewriteRelativeImportExtensions": true,
+    "declaration": false,
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"],
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["src"]
+}

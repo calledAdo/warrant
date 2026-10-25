@@ -9,6 +9,33 @@ Warrant investigates customer reports of being charged twice. Using read-only to
 
 ---
 
+## Open Agent Hackathon 2026 — Warrant Remembers Extension (Wildcard Track)
+
+This submission extends the baseline Warrant agent (tag `oah-baseline`, commit `d1c9ef7`) with three sponsor technologies:
+
+### 1. Zetaris as the Evidence Layer
+All read-only evidence gathering (billing history, engineering incidents, prior cases) now queries **Zetaris** via REST SQL at `http://localhost:8888/api/v1.0` instead of calling SaaS SDKs directly. The `warrant` database in the existing `lotline-hospital-db-1` Postgres container exposes three tables through a JDBC datasource. Two least-privilege principals (`wr_evidence`, `wr_history`) receive table-specific `SELECT` grants. **Writes that move money stay on the existing approval-bound Stripe path.**
+
+### 2. Meterless H-MEM: Precedent Memory
+Warrant now remembers past refund decisions and approver corrections with provenance and trust-ledger entries. The vendored H-MEM engine (Apache-2.0, upstream commit `1742dec`) uses durable append-only JSONL persistence (`events.jsonl`, `ledger.jsonl`) with crash-tolerant replay. The conformance suite passes 13/13. On each new case, relevant precedents are retrieved and cited in the agent's finding. Conflict detection flags precedent contradicting the current duplicate policy.
+
+### 3. Nightshift + NVIDIA Nemotron
+All model calls route through **Nightshift**'s OpenAI-compatible API, pinning two Nemotron models by name:
+- `nvidia/nemotron-3.5-lightning-30b-a3b` (fast lane: extraction, `enable_thinking=false`)
+- `nvidia/nemotron-3-ultra-550b-a55b` (deep lane: judgement, `enable_thinking=true`)
+
+Every call returns a compute receipt (receipt ID, routed model, provider, latency, tokens, cost) recorded in the trace. JSON extraction strips reasoning blocks; one repair retry for invalid replies; one transport retry for 5xx/429.
+
+### Visible New Work (Judges Score This)
+- `docs/OAH-EXTENSION.md` — baseline vs. extension, file by file
+- `docs/sponsor-tech.md` — sponsor technology explanation
+- Updated `README.md` with extension section and new credentials
+- All 47 existing tests pass; new tests for Zetaris path, H-MEM retrieval, memory-changes-decision demo, and receipts
+- Offline sample mode (`SAMPLE_MODE=true`) uses cassettes — no live services needed
+- H-MEM conformance: 13/13 pass
+
+---
+
 ## At a glance
 
 | | |
@@ -214,20 +241,41 @@ LLM_MODE=rules npm run start:demo:sqlite   # http://localhost:3000 — no Stripe
 
 The offline demo runs the same graph, policy, approval hash and journal against a local SQLite provider, so it shows the flow but makes no calls to real apps.
 
-### Requirements for the full integrated version
+### Offline Sample Mode (Cassette Replay) — For Judges
+
+The **sample mode** records live LLM and SQL interactions to JSONL cassettes, then replays them for fully offline evaluation — no Stripe, GitHub, Slack, Zetaris, Nightshift, or Postgres credentials needed.
+
+```bash
+# 1. Record a live run once (requires all services)
+WARRANT_USE_ZETARIS=true npm run start:demo &
+# ... run S1 scenario through /admin ...
+# Cassettes written to data/replays/<runId>/
+
+# 2. Replay offline (no live services needed)
+SAMPLE_MODE=true npm test
+SAMPLE_MODE=true LLM_MODE=rules npm run start:demo:sqlite
+```
+
+Cassettes are stored in `data/replays/<runDir>/` as `llm.jsonl` and `sql.jsonl`. The `src/cassette.js` module handles recording and replay matching by request hash.
+
+### Requirements for the full integrated version (with Zetaris + Nightshift)
 
 - **Node.js 22.5 or newer** (uses the built-in `node:sqlite`; developed on Node 26)
 - A **Stripe** account in test mode or a sandbox
 - A **GitHub** personal access token with `repo` scope, and a repository with Issues enabled for cases and incidents
 - A **Slack** app with the `chat:write` bot scope, installed in a workspace and invited to a channel
 - A **Lemma** API key and project ID ([platform.uselemma.ai](https://platform.uselemma.ai))
-- An **OpenAI-compatible model API with tool calling**. The multi-turn loop needs more than Groq's free tier allows (8,000 tokens per minute)
+- **Zetaris** running locally at `http://localhost:8888` (REST API) with the `lotline` platform stack
+- **Nightshift** running locally with NVIDIA Nemotron models (`nvidia/nemotron-3.5-lightning-30b-a3b` and `nvidia/nemotron-3-ultra-550b-a55b`)
+- **SeaweedFS** (S3-compatible) at `http://localhost:9000` for evidence snapshots (bucket `lotline`, prefix `warrant/`)
+- **PostgreSQL** `warrant` database in the `lotline-hospital-db-1` container (port 55433)
 - Optional: an **Arga** account for the Slack twin (`uv tool install arga-cli`)
 
 ### Configure
 
 ```bash
 cp .env.example .env     # then fill in the values below
+# Or run: npm run sync-env  # copies Zetaris/Nightshift/S3/Postgres values from Lotline .env silently
 ```
 
 | Variable | Value |
@@ -237,12 +285,60 @@ cp .env.example .env     # then fill in the values below
 | `SLACK_BOT_TOKEN`, `SLACK_CHANNEL` | `xoxb-…` token, and the channel in quotes, e.g. `"#billing-approvals"` |
 | `SLACK_API_URL` | Leave empty for real Slack; set to an Arga twin URL to use the twin |
 | `LEMMA_API_KEY`, `LEMMA_PROJECT_ID` | From Lemma project settings |
-| `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` | Any OpenAI-compatible endpoint with tool calling, e.g. `https://api.openai.com/v1` and a current model |
+| `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` | **Legacy** — kept for fallback; not used when Nightshift is configured |
 | `LLM_MODE` | `llm` to use the model, `rules` for the deterministic engine |
 | `LLM_FALLBACK` | Set to `off` to fail instead of falling back to rules when the model is unreachable |
 | `WARRANT_DB` | Path of the SQLite database (the demo scripts set their own) |
 | `WARRANT_PROVIDER` | `live` for real Stripe/GitHub/Slack, `sqlite` for the local stand-in |
 | `WARRANT_DEMO` | `s1` limits the demo pages and reset to the S1 scenario |
+| `WARRANT_USE_ZETARIS` | `true` to route evidence reads through Zetaris (default: false) |
+
+**Nightshift / Meterless (required for live model calls):**
+
+| Variable | Value |
+| --- | --- |
+| `METERLESS_BASE_URL` | Nightshift REST endpoint, e.g. `http://localhost:8080` |
+| `METERLESS_RUNTIME_TOKEN` | Nightshift runtime token |
+| `WARRANT_METERLESS_APP_ID` | Application ID for Nightshift (default: `warrant`) |
+| `NIGHTSHIFT_FAST_MODE` | `nvidia/nemotron-3.5-lightning-30b-a3b` (pinned) |
+| `NIGHTSHIFT_DEEP_MODE` | `nvidia/nemotron-3-ultra-550b-a55b` (pinned) |
+
+**Zetaris (required for live evidence layer):**
+
+| Variable | Value |
+| --- | --- |
+| `ZETARIS_REST_URL` | `http://localhost:8888/api/v1.0` |
+| `ZETARIS_ORG_ID` | `1` |
+| `ZETARIS_API_KEY` | Admin API key (setup only) |
+
+**S3 / SeaweedFS (for evidence snapshots):**
+
+| Variable | Value |
+| --- | --- |
+| `S3_ACCESS_KEY` | SeaweedFS access key |
+| `S3_SECRET_KEY` | SeaweedFS secret key |
+
+**PostgreSQL (warrant database):**
+
+| Variable | Value |
+| --- | --- |
+| `WARRANT_DB_USER` | `lotline` |
+| `WARRANT_DB_PASSWORD` | From Lotline .env |
+
+**Zetaris principals (generated locally, never committed):**
+
+| Variable | Value |
+| --- | --- |
+| `ZETARIS_WR_EVIDENCE_USER` | `wr_evidence@local.test` |
+| `ZETARIS_WR_EVIDENCE_PASSWORD` | Generated by `scripts/setup-zetaris.mjs` |
+| `ZETARIS_WR_HISTORY_USER` | `wr_history@local.test` |
+| `ZETARIS_WR_HISTORY_PASSWORD` | Generated by `scripts/setup-zetaris.mjs` |
+
+**H-MEM:**
+
+| Variable | Value |
+| --- | --- |
+| `WARRANT_HMEM_DIR` | `data/hmem` (precedent JSONL store) |
 
 ### Run the integrated demo (as recorded)
 

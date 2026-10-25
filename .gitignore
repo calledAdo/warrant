@@ -5,4 +5,8 @@ node_modules/
 verify/out/
 *.log
 fixtures/current.json
-data/
+data/*
+!data/cassettes/
+codex-build.log
+BRIEF-OAH*.md
+opencode-*.log

@@ -1,0 +1,24 @@
+# NOTICE — engines/hmem (Warrant, October 2026)
+
+Derived from the Meterless H-MEM reference implementation
+(https://github.com/Meterless/Meterless, engines/hmem/reference, Apache License 2.0),
+at the upstream commit recorded in `UPSTREAM_COMMIT` (1742dec56a66e58eef9dda2d2b865823758ca8cd).
+The spec (`AGENTS.md`) is included in the vendor as well.
+
+Warrant uses this engine as its precedent memory: approver corrections and past
+refund decisions are stored with provenance and trust-ledger entries, retrieved
+for each new case, and cited in findings.
+
+Changes made for Warrant (October 2026):
+- `memoryStore.ts`: durable persistence is now an append-only JSON Lines event log
+  (`events.jsonl`), one line per mutating operation carrying the ordered store
+  snapshot after the operation. Replay takes the last complete line and drops a
+  torn final line (crash-tolerant recovery), replacing the upstream
+  rewrite-whole-file `state.json`. `logs()` reports accepted replays for audits.
+- `trustLedger.ts`: the same tail tolerance — a torn final line in
+  `ledger.jsonl` is skipped instead of throwing at load.
+- `conformance/runner.ts` and `conformance/vectors/` are the unmodified upstream
+  conformance suite. Run: `HMEM_IMPL=$PWD/engines/hmem/src/index.ts npx tsx engines/hmem/conformance/runner.ts`.
+- The `files/file` docs/examples/workshops of the upstream engine are not vendored;
+  only `src/` (compiled with `rewriteRelativeImportExtensions` for plain-node use),
+  the spec, the conformance suite and license files are.

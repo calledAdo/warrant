@@ -1,5 +1,11 @@
 > llmtimeline · cross-agent work record. state.md is the live snapshot — rewrite it in place. sessions/ is append-only history — never edit past files. Any agent: read this file and the newest sessions/ entries before starting.
 
+# Project State — updated 2026-10-25 by opencode (session 006, Warrant Remembers)
+
+Working on the Open Agent Hackathon 2026Wildcard extension per `BRIEF-OAH.md`: Zetaris evidence layer + Meterless H-MEM precedent memory + Nightshift/Nemotron. See `sessions/006-warrant-remembers.md`. No commits (Claude reviews). Legacy 2026-09-13 state below.
+
+---
+
 # Project State — updated 2026-09-13T22:53Z by opus (session 005)
 
 ## Current blockers

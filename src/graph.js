@@ -34,7 +34,9 @@ import { enforceDuplicateRule, MAX_BATCH_REFUNDS, MAX_BATCH_TOTAL } from './dupl
 import { outcomeFor } from './outcomes.js';
 import { caseBody } from './agent.js';
 import { chatWithTools } from './llm.js';
-import { TOOLS, MAX_TOOL_CALLS, FINISH, recoverToolCall, initialMessages, runTool, decide as decideFinding, rulesInvestigation } from './agent-tools.js';
+import { TOOLS, MAX_TOOL_CALLS, FINISH, recoverToolCall, initialMessages, runTool, decide as decideFinding, rulesInvestigation, closeEvidence } from './agent-tools.js';
+import { getPrecedentMemory } from './hmem-precedent.js';
+import { EvidenceService } from './evidence.js';
 import { buildPlan, buildBatchPlan, hashPlan, isExpired, planRefunds } from './plan.js';
 import { withJournal, getApproval, refundKey, refundOperation } from './journal.js';
 import { runs } from './runstate.js';
@@ -95,7 +97,17 @@ async function load_customer(state, config) {
   run.searches = [];
   run.charges = [];
   run.incidentsSeen = [];
-  return { customer, charges: [], incidents: [], messages: initialMessages({ report: state.report, customer }) };
+
+  // Fetch relevant precedents from H-MEM
+  let precedents = [];
+  try {
+    const hmem = getPrecedentMemory();
+    precedents = await hmem.retrievePrecedents({ customerId: customer.id, complaintText: state.report, trace });
+  } catch (e) {
+    trace.emit?.('hmem', 'precedent', 'Precedent retrieval failed (continuing without)', { error: e.message });
+  }
+
+  return { customerId: customer.id, customer, charges: [], incidents: [], messages: initialMessages({ report: state.report, customer, precedents }) };
 }
 
 /** One model turn. The first turn must search; once the cap is hit it must answer. */
@@ -112,7 +124,10 @@ async function agent(state, config) {
   try {
     let out;
     try {
-      out = await chatWithTools({ messages, tools: TOOLS, toolChoice: 'required' });
+      // Once the budget is spent, only submit_finding is offered and the deep lane writes it.
+      out = budgetSpent
+        ? await chatWithTools({ messages, tools: TOOLS.filter((t) => t.function.name === FINISH), toolChoice: { type: 'function', function: { name: FINISH } }, lane: 'deep', runDir: run.dir || run.id, trace })
+        : await chatWithTools({ messages, tools: TOOLS, toolChoice: 'required', runDir: run.dir || run.id, trace });
     } catch (e) {
       const recovered = /tool_use_failed/.test(e.message) ? recoverToolCall(e) : null;
       if (!recovered) throw e;
@@ -162,7 +177,7 @@ async function tools(state, config) {
     const label = key === 'read_incidents' ? 'search incidents' : 'search charges';
     run.step(key, label, 'active', `${call.function?.name}(${(call.function?.arguments || '').slice(0, 80)})`);
     try {
-      const r = await tool(trace, call.function?.name || 'unknown_tool', JSON.parse(call.function?.arguments || '{}'), () => runTool(call, state.customerId));
+      const r = await tool(trace, call.function?.name || 'unknown_tool', JSON.parse(call.function?.arguments || '{}'), () => runTool(call, state.customerId, run.dir));
       charges = mergeById(charges, r.charges, 'id');
       incidents = mergeById(incidents, r.incidents, 'number');
       run.searches.push({ tool: r.name, args: r.args, summary: r.summary, has_more: r.has_more,
@@ -217,7 +232,7 @@ async function decide(state, config) {
   let finding, guard, charges = state.charges || [], incidents = state.incidents || [];
 
   if (state.llmFailed) {
-    const r = await rulesInvestigation(state.customerId);
+    const r = await rulesInvestigation(state.customerId, run.dir);
     charges = r.charges; incidents = r.incidents; finding = r.finding;
     const checked = enforceDuplicateRule(finding, charges, incidents);
     finding = checked.finding;
@@ -510,23 +525,95 @@ const update_case = followUp('update_case', 'update case', (state) =>
 const update_slack = followUp('update_slack', 'update slack', (state) =>
   slack.updateApplied(state.slackRef.channel, state.slackRef.ts, state.plan, state.refundResults || [state.refundResult], state.decision.approver));
 
-function finalize(state, config) {
+async function finalize(state, config) {
   const { run, trace } = ctx(config);
   run.pending = [];
   trace.recordSpan({ name: 'evaluate-final-state', output: { status: 'complete', amount_refunded: state.verifiedAmount, verified: state.verifiedAmounts } });
   run.status = 'complete';
   run.emit('update', run.snapshot());
+
+  // Record approved decision in H-MEM
+  try {
+    const hmem = getPrecedentMemory();
+    hmem.recordDecision({
+      customerId: run.customer.id,
+      caseId: run.caseNumber,
+      finding: run.finding.grounds,
+      proposal: run.plan,
+      approverDecision: 'approve',
+      approverReason: state.decision.reason || 'approved',
+      trace,
+    });
+  } catch (e) {
+    trace.emit?.('hmem', 'precedent', 'Failed to record decision', { error: e.message });
+  }
+
+  // Record case outcome to Zetaris case_history
+  try {
+    const evidence = new EvidenceService(run.dir);
+    await evidence.recordCase({
+      case_id: String(run.caseNumber),
+      customer_id: run.customer.id,
+      complaint_text: state.report,
+      finding: run.finding.verdict,
+      finding_reason: run.finding.grounds,
+      proposal: run.plan ? JSON.stringify(run.plan) : null,
+      approver_decision: 'approve',
+      approver_reason: state.decision.reason || 'approved',
+      decided_at: new Date().toISOString(),
+    }, { trace });
+    await evidence.close();
+  } catch (e) {
+    trace.emit?.('evidence', 'history', 'Failed to record case to Zetaris', { error: e.message });
+  }
+
   return {};
 }
 
 // ---------------------------------------------------------------- decline branch
 
-function record_decline(state, config) {
-  const { run } = ctx(config);
+async function record_decline(state, config) {
+  const { run, trace } = ctx(config);
   run.status = 'declined';
   run.approver = state.decision.approver;
   run.declineReason = state.decision.reason || '';
   run.emit('update', run.snapshot());
+
+  // Record approver correction in H-MEM
+  try {
+    const hmem = getPrecedentMemory();
+    hmem.recordCorrection({
+      customerId: run.customer.id,
+      caseId: run.caseNumber,
+      originalFinding: run.finding.grounds,
+      originalProposal: run.plan,
+      approverDecision: 'decline',
+      approverReason: state.decision.reason || 'no reason given',
+      trace,
+    });
+  } catch (e) {
+    trace.emit?.('hmem', 'precedent', 'Failed to record correction', { error: e.message });
+  }
+
+  // Record case outcome to Zetaris case_history
+  try {
+    const evidence = new EvidenceService(run.dir);
+    await evidence.recordCase({
+      case_id: String(run.caseNumber),
+      customer_id: run.customer.id,
+      complaint_text: state.report,
+      finding: run.finding.verdict,
+      finding_reason: run.finding.grounds,
+      proposal: run.plan ? JSON.stringify(run.plan) : null,
+      approver_decision: 'decline',
+      approver_reason: state.decision.reason || 'no reason given',
+      decided_at: new Date().toISOString(),
+    }, { trace });
+    await evidence.close();
+  } catch (e) {
+    trace.emit?.('evidence', 'history', 'Failed to record case to Zetaris', { error: e.message });
+  }
+
   return {};
 }
 

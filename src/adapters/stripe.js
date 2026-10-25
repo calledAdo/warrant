@@ -44,7 +44,12 @@ export async function getCharge(chargeId) {
 }
 
 export async function getCustomer(customerId) {
-  if (sqliteProviderEnabled()) return getDemoCustomer(customerId);
+  if (sqliteProviderEnabled()) {
+    // Try as email first, then as customer ID
+    let c = findDemoCustomerByEmail(customerId);
+    if (!c) c = getDemoCustomer(customerId);
+    return c;
+  }
   const c = await client().customers.retrieve(customerId);
   return { id: c.id, name: c.name, email: c.email };
 }
