@@ -10,3 +10,5 @@ data/*
 codex-build.log
 BRIEF-OAH*.md
 opencode-*.log
+deck/
+video/

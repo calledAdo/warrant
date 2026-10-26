@@ -30,7 +30,7 @@ Every call returns a compute receipt (receipt ID, routed model, provider, latenc
 - `docs/OAH-EXTENSION.md` — baseline vs. extension, file by file
 - `docs/sponsor-tech.md` — sponsor technology explanation
 - Updated `README.md` with extension section and new credentials
-- All 47 existing tests pass; new tests for Zetaris path, H-MEM retrieval, memory-changes-decision demo, and receipts
+- 58 tests pass, including new tests for the Zetaris path, H-MEM retrieval, the memory-changes-decision demo and receipts
 - Offline sample mode (`SAMPLE_MODE=true`) uses cassettes — no live services needed
 - H-MEM conformance: 13/13 pass
 
