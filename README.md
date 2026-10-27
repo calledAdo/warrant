@@ -276,7 +276,7 @@ npm run graph                              # print the LangGraph as Mermaid
 
 **Nightshift and NVIDIA.** Every model call goes through Nightshift's OpenAI-compatible `/chat/completions` API, with the models pinned by name: `nvidia/nemotron-3.5-lightning-30b-a3b` runs the evidence-search turns (with `chat_template_kwargs.enable_thinking=false`), and once the search budget is spent, `nvidia/nemotron-3-ultra-550b-a55b` is offered only `submit_finding` and writes the finding. Generic routing aliases are deliberately avoided. Each call records its receipt ID, routed model, provider, latency and tokens in the trace.
 
-See [the standalone sponsor explanation](docs/sponsor-tech.md).
+See [the Zetaris Unified Semantic Layer write-up](docs/zetaris-usl.md) (sources, DDL, the duplicate-candidates view, live query results, data quality rules, time saved, and a feature requirement) and [the standalone sponsor explanation](docs/sponsor-tech.md).
 
 ### Where the engine is used (judges look here)
 

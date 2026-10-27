@@ -20,8 +20,8 @@ import { sqliteProviderEnabled } from '../src/demo-store.js';
 
 const need = (k) => { const v = process.env[k]; if (!v) { console.error(`missing ${k}`); process.exit(1); } return v; };
 const s3 = new S3({ endpoint: 'http://127.0.0.1:9000', region: 'us-east-1', forcePathStyle: true, credentials: { accessKeyId: need('S3_ACCESS_KEY'), secretAccessKey: need('S3_SECRET_KEY') } });
+// Snapshots are JSON arrays: Zetaris reads a JSON file as one document, so JSON Lines would be one row.
 const put = async (key, body) => { await s3.putObject({ Bucket: 'lotline', Key: key, Body: body }); console.log(`s3a://lotline/${key}: uploaded`); };
-const toJSONL = (rows) => rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : '');
 const safeParse = (s) => { try { return JSON.parse(s); } catch { return {}; } };
 
 const toChargeRow = (c) => ({
@@ -220,9 +220,9 @@ async function syncCaseHistory() {
 
 await (async () => {
   const { charges, customers, incidents } = sqliteProviderEnabled() ? demoSnapshot() : await liveSnapshot();
-  await put('warrant/stripe/charges/part-0000.json', toJSONL(charges.map(toChargeRow)));
-  await put('warrant/stripe/customers/part-0000.json', toJSONL(customers));
-  await put('warrant/github/incidents/part-0000.json', toJSONL(incidents.map(toIncidentRow)));
+  await put('warrant/stripe/charges/part-0000.json', JSON.stringify(charges.map(toChargeRow)));
+  await put('warrant/stripe/customers/part-0000.json', JSON.stringify(customers));
+  await put('warrant/github/incidents/part-0000.json', JSON.stringify(incidents.map(toIncidentRow)));
   console.log(`snapshots: ${charges.length} charge(s), ${customers.length} customer(s), ${incidents.length} incident(s)`);
   await syncZetarisTables(charges, customers, incidents);
   await syncCaseHistory();

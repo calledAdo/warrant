@@ -209,3 +209,6 @@ H-MEM conformance: 13/13 pass
 | `src/agent-tools.js` | Zetaris rows map to the Stripe charge shape with UTC times and string booleans parsed correctly; precedents formatted one per line; one evidence service per run |
 | `src/evidence.js` | Case outcomes written to the `warrant` PostgreSQL database with a parameterised query; Zetaris stays read-only |
 | `src/graph.js` | Tools receive the run ID, so Zetaris queries are recorded under the run |
+| `scripts/register_zetaris_usl.sql`, `scripts/setup-usl.mjs` | Snapshot tables in Zetaris and the `wr_views.duplicate_candidates` semantic view |
+| `scripts/usl-report.mjs`, `docs/zetaris-usl.md`, `docs/zetaris-usl-results.md` | Zetaris USL write-up with live query results and data quality rules |
+| `scripts/sync-evidence.mjs` | Snapshots written as JSON arrays so Zetaris reads them as rows |
