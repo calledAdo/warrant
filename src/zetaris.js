@@ -1,7 +1,7 @@
 // Warrant Zetaris backend — evidence layer over Zetaris REST SQL
 // Pattern adapted from Lotline's src/data/zetaris.ts
 import { randomUUID } from "node:crypto";
-import { record } from "./cassette.js";
+import { record, replay } from "./cassette.js";
 // Trace is imported dynamically where needed; we only use the emit method
 import { Principal } from "./evidence-policy.js";
 import { isPrincipal, principalName, refuse, checkQuery } from "./evidence-policy.js";
@@ -116,6 +116,12 @@ export class ZetarisBackend {
     checkQuery(this.principal, sql, ctx.trace);
     const principal = principalName(this.principal);
     const t0 = Date.now();
+    if (process.env.SAMPLE_MODE === "true") {
+      // Offline: the rows Zetaris returned for this principal and SQL in the recorded live run.
+      const rows = replay("sql", { principal, sql }, this.runDir);
+      ctx.trace.emit("sql", ctx.agent, `${ctx.purpose}: ${rows.length} rows replayed from the Zetaris recording`, { principal, backend: "zetaris-replay", sql, rows: rows.length });
+      return rows;
+    }
     let r;
     try { r = await this.run(sql); }
     catch (err) {

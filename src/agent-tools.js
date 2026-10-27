@@ -1,3 +1,4 @@
+import { nowMs } from './clock.js';
 /**
  * The investigation as a bounded tool loop.
  *
@@ -25,11 +26,36 @@ const POLICY = readFileSync(new URL('./policy.md', import.meta.url), 'utf8');
 // Zetaris evidence layer flag — when true, reads go through Zetaris instead of direct SaaS SDKs
 // Writes that move money (refunds) stay on the existing approval-bound Stripe path.
 const USE_ZETARIS = process.env.WARRANT_USE_ZETARIS === 'true';
-let evidenceService;
+// Zetaris returns timestamps without a zone ("2026-10-27 08:59:42.0"); the warrant database stores UTC.
+const utcMs = (v) => {
+  const text = String(v).trim().replace(' ', 'T');
+  return Date.parse(/[zZ]|[+-]\d\d:?\d\d$/.test(text) ? text : `${text}Z`);
+};
+
+/** A Zetaris billing row in the same shape as stripe.searchCharges: Stripe id, cents, epoch seconds. */
+export const fromZetarisCharge = (c) => {
+  const created = Math.floor(utcMs(c.created_at) / 1000);
+  const refunded = c.refunded === true || String(c.refunded).toLowerCase() === 'true';
+  const metadata = c.metadata ? JSON.parse(c.metadata) : {};
+  return {
+    id: c.stripe_charge_id, customer: c.customer_id, amount: Number(c.amount), currency: c.currency,
+    description: c.description, status: c.status, created, created_iso: new Date(created * 1000).toISOString(),
+    refunded, amount_refunded: refunded ? Number(c.amount) : 0, billing_keys: metadata.billing_keys || [],
+  };
+};
+
+/** A Zetaris incident row in the same shape as github.searchIncidents. */
+const fromZetarisIncident = (i) => ({
+  ...i, number: Number(i.github_issue_number), created_iso: new Date(utcMs(i.created_at)).toISOString(),
+  coverage_start_iso: null, coverage_end_iso: null, body: i.body || '',
+});
+
+// One evidence service per run, so its Zetaris queries are recorded under that run.
+const evidenceServices = new Map();
 
 function getEvidenceService(runDir) {
-  if (!evidenceService) evidenceService = new EvidenceService(runDir);
-  return evidenceService;
+  if (!evidenceServices.has(runDir)) evidenceServices.set(runDir, new EvidenceService(runDir));
+  return evidenceServices.get(runDir);
 }
 
 export const TOOLS = [
@@ -146,7 +172,7 @@ export function initialMessages({ report, customer, precedents = [] }) {
     {
       role: 'user',
       content: [
-        `Today is ${new Date().toISOString().slice(0, 10)}.`,
+        `Today is ${new Date(nowMs()).toISOString().slice(0, 10)}.`,
         `Customer: ${customer.name}. Their charges are reachable only through search_charges.`,
         ...precedentContext,
         '<customer_report>',
@@ -180,15 +206,7 @@ export async function runTool(call, customerId, runDir) {
     if (USE_ZETARIS) {
       const evidence = getEvidenceService(runDir);
       const charges = await evidence.searchCharges(customerId, { trace: { emit: () => {} } });
-      const zetarisCharges = charges.map((c) => {
-        const created = Math.floor(new Date(c.created_at).getTime() / 1000);
-        const metadata = c.metadata ? JSON.parse(c.metadata) : {};
-        return {
-          id: c.stripe_charge_id, customer: c.customer_id, amount: Number(c.amount), currency: c.currency,
-          description: c.description, status: c.status, created, created_iso: new Date(created * 1000).toISOString(),
-          refunded: Boolean(c.refunded), amount_refunded: c.refunded ? Number(c.amount) : 0, billing_keys: metadata.billing_keys || [],
-        };
-      });
+      const zetarisCharges = charges.map(fromZetarisCharge);
       return {
         name, args,
         // Same shape as stripe.searchCharges: the Stripe charge id, cents and epoch seconds.
@@ -225,12 +243,12 @@ export async function runTool(call, customerId, runDir) {
   if (name === 'search_incidents') {
     if (USE_ZETARIS) {
       const evidence = getEvidenceService(runDir);
-      const sinceDays = args.since ? Math.ceil((Date.now() - new Date(args.since).getTime()) / (24 * 60 * 60 * 1000)) : 365;
+      const sinceDays = args.since ? Math.ceil((nowMs() - new Date(args.since).getTime()) / (24 * 60 * 60 * 1000)) : 365;
       const incidents = await evidence.searchIncidents({ trace: { emit: () => {} } }, sinceDays);
       return {
         name, args,
         charges: [],
-        incidents: incidents.map(i => ({ ...i, number: i.github_issue_number, created_iso: i.created_at, coverage_start_iso: null, coverage_end_iso: null, body: i.body || '' })),
+        incidents: incidents.map(fromZetarisIncident),
         summary: `${incidents.length} incident${incidents.length === 1 ? '' : 's'}`,
         content: JSON.stringify({
           incidents: incidents.slice(0, 8).map(i => ({ number: i.number, created: i.created_iso, title: i.title, coverage_start: i.coverage_start_iso || null, coverage_end: i.coverage_end_iso || null, body: i.body.replace(/\s+/g, ' ').slice(0, 120) })),
@@ -298,10 +316,10 @@ export async function rulesInvestigation(customerId, runDir) {
     const charges = await evidence.searchCharges(customerId, { trace: { emit: () => {} } });
     const incidents = await evidence.searchIncidents({ trace: { emit: () => {} } }, 365);
     return {
-      charges: charges.map(c => ({ ...c, amount: c.amount, currency: c.currency, status: c.status, created: c.created_at, created_iso: c.created_at, amount_refunded: c.refunded ? c.amount : 0, description: c.description, billing_keys: c.metadata ? JSON.parse(c.metadata).billing_keys : [] })),
-      incidents: incidents.map(i => ({ ...i, number: i.github_issue_number, created_iso: i.created_at, coverage_start_iso: null, coverage_end_iso: null, body: i.body || '' })),
+      charges: charges.map(fromZetarisCharge),
+      incidents: incidents.map(fromZetarisIncident),
       chargesComplete: true,
-      finding: assembleCaseByRules({ charges: charges.map(c => ({ ...c, amount: c.amount, currency: c.currency, status: c.status, created: c.created_at, created_iso: c.created_at, amount_refunded: c.refunded ? c.amount : 0, description: c.description, billing_keys: c.metadata ? JSON.parse(c.metadata).billing_keys : [] })), incidents: incidents.map(i => ({ ...i, number: i.github_issue_number, created_iso: i.created_at, coverage_start_iso: null, coverage_end_iso: null, body: i.body || '' })) })
+      finding: assembleCaseByRules({ charges: charges.map(fromZetarisCharge), incidents: incidents.map(fromZetarisIncident) })
     };
   }
   const charges = [];
@@ -313,10 +331,10 @@ export async function rulesInvestigation(customerId, runDir) {
     if (!r.next_cursor) { chargesComplete = true; break; }
     cursor = r.next_cursor;
   }
-  const oldest = charges.reduce((min, c) => Math.min(min, c.created), Math.floor(Date.now() / 1000));
+  const oldest = charges.reduce((min, c) => Math.min(min, c.created), Math.floor(nowMs() / 1000));
   const { incidents } = await github.searchIncidents({
     since: new Date((oldest - 86400) * 1000).toISOString(),
-    until: new Date().toISOString(),
+    until: new Date(nowMs()).toISOString(),
   });
   return { charges, incidents, chargesComplete, finding: assembleCaseByRules({ charges, incidents }) };
 }

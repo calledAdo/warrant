@@ -177,7 +177,7 @@ async function tools(state, config) {
     const label = key === 'read_incidents' ? 'search incidents' : 'search charges';
     run.step(key, label, 'active', `${call.function?.name}(${(call.function?.arguments || '').slice(0, 80)})`);
     try {
-      const r = await tool(trace, call.function?.name || 'unknown_tool', JSON.parse(call.function?.arguments || '{}'), () => runTool(call, state.customerId, run.dir));
+      const r = await tool(trace, call.function?.name || 'unknown_tool', JSON.parse(call.function?.arguments || '{}'), () => runTool(call, state.customerId, run.dir || run.id));
       charges = mergeById(charges, r.charges, 'id');
       incidents = mergeById(incidents, r.incidents, 'number');
       run.searches.push({ tool: r.name, args: r.args, summary: r.summary, has_more: r.has_more,

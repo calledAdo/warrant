@@ -1,3 +1,4 @@
+import { nowMs } from '../clock.js';
 import {
   sqliteProviderEnabled, demoIncidents, createDemoCase, updateDemoCase,
   commentDemoCase, getDemoCase,
@@ -86,7 +87,7 @@ export async function getCase(number) {
 export async function searchIncidents({ since, until, keywords } = {}) {
   const parsedFrom = since ? Date.parse(since) : NaN;
   const parsedTo = until ? Date.parse(until) : NaN;
-  const to = Number.isFinite(parsedTo) ? Math.min(parsedTo, Date.now()) : Date.now();
+  const to = Number.isFinite(parsedTo) ? Math.min(parsedTo, nowMs()) : nowMs();
   const from = Number.isFinite(parsedFrom) ? Math.max(parsedFrom, to - 365 * 86400000) : to - 30 * 86400000;
   if (from > to) throw new Error('incident search start must be before end');
   const words = String(keywords || '').toLowerCase().split(/[\s,]+/).filter((w) => w.length > 2).slice(0, 6);

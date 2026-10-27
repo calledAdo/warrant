@@ -1,3 +1,4 @@
+import { nowMs } from './clock.js';
 /**
  * Warrant evidence layer — queries Zetaris for billing history, engineering incidents, and case history
  * Replaces direct SaaS SDK calls for READ operations. Writes that move money stay on existing Stripe path.
@@ -93,7 +94,7 @@ export class EvidenceService {
    */
   async searchIncidents(ctx, sinceDays = 365) {
     const agent = this.forAgent("evidence");
-    const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+    const since = new Date(nowMs() - sinceDays * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
     const sql = `SELECT * FROM warrant_db.engineering_incidents WHERE created_at >= '${since}' ORDER BY created_at DESC LIMIT 100`;
     const rows = await agent.query(sql, { agent: "evidence", purpose: "search_incidents", trace: ctx.trace });
     return rows.map(r => ({
@@ -140,30 +141,33 @@ export class EvidenceService {
    * @returns {Promise<void>}
    */
   async recordCase(caseRecord, ctx) {
-    const agent = this.forAgent("history");
+    // Runtime Zetaris principals are read-only by design, so outcomes are written to the
+    // warrant PostgreSQL database that Zetaris serves; the next read through Zetaris sees them.
+    const { default: pg } = await import('pg');
+    const client = new pg.Client({
+      host: process.env.WARRANT_PG_HOST || '127.0.0.1',
+      port: Number(process.env.WARRANT_PG_PORT || 55433),
+      database: 'warrant',
+      user: process.env.WARRANT_DB_USER,
+      password: process.env.WARRANT_DB_PASSWORD,
+    });
     const now = new Date().toISOString();
-    const decidedAt = caseRecord.decided_at || now;
-    const findingReason = caseRecord.finding_reason ? `'${caseRecord.finding_reason.replace(/'/g, "''")}'` : 'NULL';
-    const proposal = caseRecord.proposal ? `'${JSON.stringify(caseRecord.proposal).replace(/'/g, "''")}'` : 'NULL';
-    const approverDecision = caseRecord.approver_decision ? `'${caseRecord.approver_decision.replace(/'/g, "''")}'` : 'NULL';
-    const approverReason = caseRecord.approver_reason ? `'${caseRecord.approver_reason.replace(/'/g, "''")}'` : 'NULL';
-    
-    const sql = `INSERT INTO warrant_db.case_history 
-      (case_id, customer_id, complaint_text, finding, finding_reason, proposal, approver_decision, approver_reason, decided_at, created_at)
-      VALUES 
-      ('${caseRecord.case_id.replace(/'/g, "''")}', 
-       '${caseRecord.customer_id.replace(/'/g, "''")}', 
-       '${caseRecord.complaint_text.replace(/'/g, "''")}', 
-       '${caseRecord.finding.replace(/'/g, "''")}', 
-       ${findingReason}, 
-       ${proposal}, 
-       ${approverDecision}, 
-       ${approverReason}, 
-       '${decidedAt}', 
-       '${now}')`;
-    
-    await agent.query(sql, { agent: "history", purpose: "record_case", trace: ctx.trace });
-    ctx.trace.emit("evidence", "history", "Recorded case to Zetaris", { case_id: caseRecord.case_id, customer_id: caseRecord.customer_id });
+    await client.connect();
+    try {
+      await client.query(
+        `INSERT INTO case_history (case_id, customer_id, complaint_text, finding, finding_reason, proposal, approver_decision, approver_reason, decided_at, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         ON CONFLICT (case_id) DO UPDATE SET finding = EXCLUDED.finding, finding_reason = EXCLUDED.finding_reason,
+           proposal = EXCLUDED.proposal, approver_decision = EXCLUDED.approver_decision,
+           approver_reason = EXCLUDED.approver_reason, decided_at = EXCLUDED.decided_at`,
+        [caseRecord.case_id, caseRecord.customer_id, caseRecord.complaint_text, caseRecord.finding,
+         caseRecord.finding_reason ?? null, caseRecord.proposal == null ? null : typeof caseRecord.proposal === 'string' ? caseRecord.proposal : JSON.stringify(caseRecord.proposal),
+         caseRecord.approver_decision ?? null, caseRecord.approver_reason ?? null, caseRecord.decided_at || now, now],
+      );
+    } finally {
+      await client.end();
+    }
+    ctx.trace.emit("evidence", "history", "Recorded case outcome to the warrant database", { case_id: caseRecord.case_id, customer_id: caseRecord.customer_id });
   }
 
   async close() {

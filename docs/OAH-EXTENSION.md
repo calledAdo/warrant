@@ -198,3 +198,14 @@ H-MEM conformance: 13/13 pass
 - Case history IS now auto-synced to Zetaris case_history on finalize and record_decline
 - Conflict detection is rule-based (keyword matching), not semantic
 - SQLite storage and leases support one host; multi-host needs shared transactional DB
+### Added on 27 October 2026 (review fixes)
+
+| File | Change |
+|---|---|
+| `src/clock.js` | `WARRANT_NOW` fixes the clock for a recorded run, so it replays exactly |
+| `scripts/record-live-run.mjs` | Records one live investigation (Zetaris + Nightshift) into `data/cassettes/` |
+| `scripts/replay-live-run.mjs` | `npm run demo:replay`: replays that run offline with no credentials |
+| `src/zetaris.js`, `src/llm.js`, `src/cassette.js` | Offline replay of Zetaris SQL results and Nemotron replies in `SAMPLE_MODE` |
+| `src/agent-tools.js` | Zetaris rows map to the Stripe charge shape with UTC times and string booleans parsed correctly; precedents formatted one per line; one evidence service per run |
+| `src/evidence.js` | Case outcomes written to the `warrant` PostgreSQL database with a parameterised query; Zetaris stays read-only |
+| `src/graph.js` | Tools receive the run ID, so Zetaris queries are recorded under the run |

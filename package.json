@@ -28,7 +28,8 @@
     "history:archive": "node scripts/archive-history.mjs",
     "engine:build": "tsc -p engines/hmem/tsconfig.build.json",
     "engine:conformance": "HMEM_IMPL=$PWD/engines/hmem/src/index.ts tsx engines/hmem/conformance/runner.ts",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "demo:replay": "node scripts/replay-live-run.mjs"
   },
   "dependencies": {
     "@langchain/core": "^1.2.11",

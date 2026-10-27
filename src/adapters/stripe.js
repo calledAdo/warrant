@@ -1,3 +1,4 @@
+import { nowMs } from '../clock.js';
 import Stripe from 'stripe';
 import {
   sqliteProviderEnabled, findDemoCustomerByEmail, getDemoCustomer, getDemoCharge,
@@ -98,7 +99,7 @@ export const CHARGE_SEARCH = { maxPerCall: 10, maxLookbackDays: 365 };
  */
 export async function searchCharges(customerId, { cursor, created_after, created_before, limit } = {}) {
   if (sqliteProviderEnabled()) return listDemoCharges(customerId, { cursor, created_after, created_before, limit });
-  const floor = Math.floor(Date.now() / 1000) - CHARGE_SEARCH.maxLookbackDays * 86400;
+  const floor = Math.floor(nowMs() / 1000) - CHARGE_SEARCH.maxLookbackDays * 86400;
   const parse = (d) => (d ? Math.floor(Date.parse(d) / 1000) : NaN);
   const gte = Math.max(floor, Number.isFinite(parse(created_after)) ? parse(created_after) : floor);
   const created = { gte };

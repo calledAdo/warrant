@@ -262,3 +262,14 @@ test('precedents reach the model as one readable line each', async () => {
   assert.match(user, /\[1\] Memory mem-1 \(score: 0\.82\): Approver rejected: a plan change plus proration is not a duplicate\. — similar charges/);
   assert.ok(!/\n.\n.\n/.test(user), 'precedent text must not be split into single characters');
 });
+
+test('Zetaris billing rows map to the Stripe charge shape (UTC times, string booleans)', async () => {
+  const { fromZetarisCharge } = await import('../src/agent-tools.js');
+  const c = fromZetarisCharge({ stripe_charge_id: 'ch_2', customer_id: 'cus_1', amount: '4900', currency: 'usd', status: 'succeeded', created_at: '2026-10-27 08:59:42.0', refunded: 'false', description: 'Invoice', metadata: null });
+  assert.equal(c.id, 'ch_2');
+  assert.equal(c.amount, 4900);
+  assert.equal(c.created_iso, '2026-10-27T08:59:42.000Z');
+  assert.equal(c.refunded, false);
+  assert.equal(c.amount_refunded, 0);
+  assert.equal(fromZetarisCharge({ stripe_charge_id: 'ch_3', amount: '4900', created_at: '2026-10-27 09:00:00', refunded: 'true' }).amount_refunded, 4900);
+});

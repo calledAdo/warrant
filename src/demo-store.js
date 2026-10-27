@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { db } from './storage.js';
+import { nowMs } from './clock.js';
 
 export const sqliteProviderEnabled = () => process.env.WARRANT_PROVIDER === 'sqlite';
 
@@ -57,7 +58,7 @@ export function resetDemoProvider() {
 export function seedS1Provider() {
   const existing = db.prepare('SELECT id FROM demo_customers WHERE email=?').get('billing@northwind.test');
   if (existing) return demoStatus();
-  const now = Math.floor(Date.now() / 1000);
+  const now = Math.floor(nowMs() / 1000);
   const customer = { id: 'cus_demo_northwind', name: 'Northwind Trading Co.', email: 'billing@northwind.test' };
   db.prepare('INSERT INTO demo_customers VALUES (?,?,?)').run(customer.id, customer.name, customer.email);
   const insert = db.prepare(`INSERT INTO demo_charges
@@ -107,7 +108,7 @@ export function listDemoCharges(customerId, { cursor, created_after, created_bef
     has_more: rows.length > size,
     next_cursor: rows.length > size ? page.at(-1)?.id || null : null,
     window: {
-      from: Number.isFinite(after) ? new Date(after * 1000).toISOString().slice(0, 10) : new Date(Date.now() - 365 * 86400000).toISOString().slice(0, 10),
+      from: Number.isFinite(after) ? new Date(after * 1000).toISOString().slice(0, 10) : new Date(nowMs() - 365 * 86400000).toISOString().slice(0, 10),
       to: Number.isFinite(before) ? new Date(before * 1000).toISOString().slice(0, 10) : 'now',
     },
   };

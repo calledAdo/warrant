@@ -25,13 +25,14 @@ Use Node.js 22.5 or later (it uses the built-in `node:sqlite`) and npm:
 git clone https://github.com/calledAdo/warrant.git
 cd warrant
 npm install
-npm test                                   # 59 offline tests, no accounts needed
+npm test                                   # 60 offline tests, no accounts needed
 npm run engine:conformance                 # Meterless H-MEM conformance, 13/13
+npm run demo:replay                        # replay the recorded live Zetaris + Nemotron investigation
 npm run demo:prepare:sqlite                # seed the fictional S1 customer locally
 LLM_MODE=rules npm run start:demo:sqlite   # http://localhost:3000 and /admin
 ```
 
-The offline app runs the same graph, duplicate policy, approval hash and journal against a local SQLite stand-in for Stripe, with the deterministic rules engine in place of the model. `test/memory-flow.test.mjs` runs the memory story end to end with scripted model replies: an approver declines Case A ("a plan change plus proration is not a duplicate"), and Warrant then refuses the similar Case B, citing that precedent. The same test fails when the memory store is empty. The recorded live run is in [docs/live-run.md](docs/live-run.md) and `data/cassettes/live-2026-10-25.jsonl`.
+The offline app runs the same graph, duplicate policy, approval hash and journal against a local SQLite stand-in for Stripe, with the deterministic rules engine in place of the model. `test/memory-flow.test.mjs` runs the memory story end to end with scripted model replies: an approver declines Case A ("a plan change plus proration is not a duplicate"), and Warrant then refuses the similar Case B, citing that precedent. The same test fails when the memory store is empty. `npm run demo:replay` re-runs the recorded live investigation with no `.env` and no network: the real graph, tools and duplicate policy, fed the Zetaris query results and Nemotron replies from `data/cassettes/live-2026-10-27.jsonl`. It ends at awaiting approval with a refund proposed for `ch_demo_northwind_02`. See [docs/live-run.md](docs/live-run.md).
 
 ## Architecture
 
@@ -296,9 +297,9 @@ npm run engine:conformance
 npx tsc
 ```
 
-- **Offline tests:** 59 pass. The baseline suite covers the duplicate policy, batches and caps, the approval hash, the operation journal, crash recovery, run leases, Lemma holds and audit retention. The extension adds the Zetaris evidence path, the per-principal policy, H-MEM retrieval, receipts, precedent formatting, and the memory-changes-decision flow, including the failure when memory is empty.
+- **Offline tests:** 60 pass. The baseline suite covers the duplicate policy, batches and caps, the approval hash, the operation journal, crash recovery, run leases, Lemma holds and audit retention. The extension adds the Zetaris evidence path, the per-principal policy, H-MEM retrieval, receipts, precedent formatting, Zetaris row mapping (UTC times, string booleans), and the memory-changes-decision flow, including the failure when memory is empty.
 - **H-MEM conformance:** 13/13 upstream checks pass.
-- **Live run (25 October 2026):** one complaint end to end through Zetaris and Nightshift, investigation only. Four Nemotron Lightning search turns and one Nemotron Ultra finding, five receipts. Verdict: duplicate, refund `ch_demo_northwind_02`, with the billing-retry incident as the cause. The model also noted that the customer said "March" while the charges were in September. The code check accepted the finding, and the run stopped at awaiting approval. Nothing was refunded. Details: [docs/live-run.md](docs/live-run.md).
+- **Live run (27 October 2026):** one complaint end to end through Zetaris and Nightshift, investigation only, at a fixed clock so it replays exactly (`npm run demo:replay`). Five Nemotron Lightning search turns and one Nemotron Ultra finding, six receipts, and eight Zetaris queries as `wr_evidence`. Verdict: duplicate, refund `ch_demo_northwind_02`: two identical 49.00 USD charges 43 seconds apart. The code check accepted it, and the run stopped at awaiting approval. Nothing was refunded. Details: [docs/live-run.md](docs/live-run.md).
 
 ### Live scenarios (baseline, Stripe test mode, GitHub and Slack)
 
@@ -332,9 +333,9 @@ Declared pre-existing components: the Warrant baseline at tag `oah-baseline` (13
 
 ## Limitations and security
 
-- Runtime Zetaris principals are read-only, so writing a new case outcome to `case_history` through Zetaris is refused. That error is caught and the run continues. Outcomes are kept in Warrant's SQLite store and in H-MEM, and `sync-evidence` refreshes the Zetaris tables.
+- Runtime Zetaris principals are read-only by design. Case outcomes are written directly to the `warrant` PostgreSQL database that Zetaris serves, and the next read through Zetaris sees them.
 - The Zetaris evidence path reads synced snapshots of Stripe and GitHub, not live tables.
-- The offline app uses the rules engine. The memory flow is exercised by a test with scripted model replies, and the live model run is documented rather than replayed.
+- The offline web app uses the rules engine. The model path runs offline only as the exact replay of the recorded live run, and the memory flow is exercised by a test with scripted model replies.
 - SQLite storage and leases support one host. A multi-host deployment needs runs, leases, checkpoints, approvals and the journal in one shared transactional database.
 - Ambiguous provider writes need a person to reconcile them (`npm run journal:reconcile`). Approval happens on `/admin`, not in Slack. The customer's email is not verified before a complaint is accepted.
 - `.env`, local databases and the H-MEM store are ignored by git. The recorded cassette contains model request and response bodies only, never authorization headers.

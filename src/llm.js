@@ -219,8 +219,23 @@ export async function chatWithTools({ messages, tools, toolChoice = 'auto', lane
   const appId = process.env.WARRANT_METERLESS_APP_ID || 'warrant';
   const model = modelFor(lane);
 
-  const body = JSON.stringify({ model, messages, tools, tool_choice: toolChoice, temperature: 0, max_tokens: maxTokens, chat_template_kwargs: { enable_thinking: false } });
+  const request = { model, messages, tools, tool_choice: toolChoice, temperature: 0, max_tokens: maxTokens, chat_template_kwargs: { enable_thinking: false } };
+  const body = JSON.stringify(request);
   let res;
+
+  // Offline: the Nightshift reply recorded for this exact request; no network call.
+  if (process.env.SAMPLE_MODE === 'true') {
+    const { replay } = await import('./cassette.js');
+    const json = replay('llm', request, runDir);
+    const message = json.choices?.[0]?.message ?? { role: 'assistant', content: '' };
+    trace?.emit?.('llm', 'agent', `chatWithTools -> ${json.meterless?.routed_model ?? model} (replayed ${json.meterless?.receipt_id ?? ''})`, { lane, purpose: 'chatWithTools', receipt: { receiptId: json.meterless?.receipt_id ?? null, requestedModel: model, routedModel: json.meterless?.routed_model ?? null, replayed: true } });
+    return {
+      message: { role: 'assistant', content: message.content ?? '', ...(message.tool_calls?.length ? { tool_calls: message.tool_calls } : {}) },
+      model: json.meterless?.routed_model ?? json.model ?? model,
+      durationMs: 0,
+      usage: { inputTokens: json.usage?.prompt_tokens ?? 0, outputTokens: json.usage?.completion_tokens ?? 0 },
+    };
+  }
 
   for (let attempt = 0; attempt < 6; attempt++) {
     res = await fetch(`${base}/chat/completions`, {
