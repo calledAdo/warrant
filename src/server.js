@@ -118,7 +118,7 @@ const server = createServer(async (req, res) => {
         slackApi: sqliteProviderEnabled() ? 'sqlite' : (process.env.SLACK_API_URL || 'https://slack.com'),
         repo: sqliteProviderEnabled() ? null : process.env.GITHUB_REPO,
         engine: 'langgraph',
-        model: process.env.LLM_MODE === 'rules' ? 'rules engine' : (process.env.OPENAI_MODEL || 'rules engine'),
+        model: process.env.LLM_MODE === 'rules' ? 'rules engine' : (process.env.NIGHTSHIFT_FAST_MODE || 'nvidia/nemotron-3.5-lightning-30b-a3b'),
         provider: sqliteProviderEnabled() ? 'sqlite' : 'live',
         demo: integratedS1Demo ? 's1' : null,
       });

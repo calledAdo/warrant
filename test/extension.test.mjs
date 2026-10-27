@@ -9,7 +9,7 @@ process.env.WARRANT_DB = join(dir, 'db.sqlite');
 process.env.WARRANT_HMEM_DIR = join(dir, 'hmem');
 process.env.WARRANT_USE_ZETARIS = 'false';
 process.env.LLM_MODE = 'rules';
-process.env.OPENAI_API_KEY = 'offline';
+process.env.METERLESS_RUNTIME_TOKEN = 'offline';
 process.env.LEMMA_API_KEY = '';
 process.env.LEMMA_PROJECT_ID = '';
 
@@ -254,4 +254,11 @@ test('PrecedentMemory: end-to-end memory flow - correction stored, then retrieve
   console.log(`  - Case 2 retrieved precedent: ${retrieved.memory.id} (score: ${retrieved.score.toFixed(3)})`);
   console.log(`  - Conflict detected: ${conflicts[0].conflict}`);
   console.log(`  - Relevance: ${retrieved.relevance}`);
+});
+test('precedents reach the model as one readable line each', async () => {
+  const { initialMessages } = await import('../src/agent-tools.js');
+  const precedents = [{ memory: { id: 'mem-1', content: 'Approver rejected: a plan change plus proration is not a duplicate.' }, score: 0.82, relevance: 'similar charges' }];
+  const user = initialMessages({ report: 'You charged us twice.', customer: { name: 'Northwind' }, precedents })[1].content;
+  assert.match(user, /\[1\] Memory mem-1 \(score: 0\.82\): Approver rejected: a plan change plus proration is not a duplicate\. — similar charges/);
+  assert.ok(!/\n.\n.\n/.test(user), 'precedent text must not be split into single characters');
 });

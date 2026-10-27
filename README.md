@@ -1,122 +1,64 @@
 # Warrant
 
-**An AI agent that has to earn the right to move money.**
+**An AI agent that has to earn the right to move money, and now remembers what approvers teach it.**
 
-Warrant investigates customer reports of being charged twice. Using read-only tools, it searches the customer's billing history in **Stripe**, paging back as far as it needs, and searches **GitHub** for an engineering incident that could explain the double charge. It writes up a cited case, then does one of two things: it proposes an exact refund (or one approval-bound batch of refunds) and **waits for a person on the billing team to approve it**, or it **refuses** and states exactly what evidence is missing. Every decision is recorded in GitHub and Slack, every run is traced in **Lemma**, and failure handling is tested against an **Arga** Slack twin.
+Warrant investigates customer reports of being charged twice. It searches the customer's billing history and engineering incidents, writes up a cited case, then either proposes an exact refund and **waits for a person to approve it**, or **refuses** and states what evidence is missing. It moves money only through an approval bound to the exact plan.
 
-**▶ Demo video (2 min):** https://youtu.be/T2u0wYKTFAw
-**Repository:** https://github.com/calledAdo/warrant
+**Warrant Remembers** is the Open Agent Hackathon 2026 extension (Wildcard [Tinkerer]). Warrant existed before the hackathon; the extension adds a Zetaris evidence layer, Meterless H-MEM precedent memory, and Meterless Nightshift with NVIDIA Nemotron as the model provider. The customers are **fictional** and Stripe runs in **test mode** only.
 
----
+## What was built in the hackathon
 
-## Open Agent Hackathon 2026 — Warrant Remembers Extension (Wildcard Track)
+The pre-existing project is tagged [`oah-baseline`](https://github.com/calledAdo/warrant/tree/oah-baseline) (commit `d1c9ef7`, 13 September 2026). Everything below was built in the build window, 22–27 October 2026. [docs/OAH-EXTENSION.md](docs/OAH-EXTENSION.md) lists every file.
 
-This submission extends the baseline Warrant agent (tag `oah-baseline`, commit `d1c9ef7`) with three sponsor technologies:
+| | Before (`oah-baseline`) | After (Warrant Remembers) |
+|---|---|---|
+| **Evidence** | Each tool called a separate SaaS API (Stripe, GitHub) directly | Billing history, incidents and past cases are read with SQL through **Zetaris**, by read-only principals |
+| **Memory** | Every case started from nothing; an approver's reason was forgotten | Approver decisions and corrections are stored in **Meterless H-MEM** with provenance and a trust ledger, retrieved for similar cases and cited by ID |
+| **Models** | One OpenAI-compatible model, no compute receipts | **Nightshift** with **NVIDIA Nemotron** pinned by name: 3.5 Lightning for evidence searches, 3 Ultra for the final finding, a receipt for every call |
+| **Money** | Approval bound to the plan hash, expiry, journal, idempotent refunds | Unchanged. Refunds never go through the evidence layer |
 
-### 1. Zetaris as the Evidence Layer
-All read-only evidence gathering (billing history, engineering incidents, prior cases) now queries **Zetaris** via REST SQL at `http://localhost:8888/api/v1.0` instead of calling SaaS SDKs directly. The `warrant` database in the existing `lotline-hospital-db-1` Postgres container exposes three tables through a JDBC datasource. Two least-privilege principals (`wr_evidence`, `wr_history`) receive table-specific `SELECT` grants. **Writes that move money stay on the existing approval-bound Stripe path.**
+## Try it without credentials
 
-### 2. Meterless H-MEM: Precedent Memory
-Warrant now remembers past refund decisions and approver corrections with provenance and trust-ledger entries. The vendored H-MEM engine (Apache-2.0, upstream commit `1742dec`) uses durable append-only JSONL persistence (`events.jsonl`, `ledger.jsonl`) with crash-tolerant replay. The conformance suite passes 13/13. On each new case, relevant precedents are retrieved and cited in the agent's finding. Conflict detection flags precedent contradicting the current duplicate policy.
+Use Node.js 22.5 or later (it uses the built-in `node:sqlite`) and npm:
 
-### 3. Nightshift + NVIDIA Nemotron
-All model calls route through **Nightshift**'s OpenAI-compatible API, pinning two Nemotron models by name:
-- `nvidia/nemotron-3.5-lightning-30b-a3b` (fast lane: extraction, `enable_thinking=false`)
-- `nvidia/nemotron-3-ultra-550b-a55b` (deep lane: judgement, `enable_thinking=true`)
+```sh
+git clone https://github.com/calledAdo/warrant.git
+cd warrant
+npm install
+npm test                                   # 59 offline tests, no accounts needed
+npm run engine:conformance                 # Meterless H-MEM conformance, 13/13
+npm run demo:prepare:sqlite                # seed the fictional S1 customer locally
+LLM_MODE=rules npm run start:demo:sqlite   # http://localhost:3000 and /admin
+```
 
-Every call returns a compute receipt (receipt ID, routed model, provider, latency, tokens, cost) recorded in the trace. JSON extraction strips reasoning blocks; one repair retry for invalid replies; one transport retry for 5xx/429.
+The offline app runs the same graph, duplicate policy, approval hash and journal against a local SQLite stand-in for Stripe, with the deterministic rules engine in place of the model. `test/memory-flow.test.mjs` runs the memory story end to end with scripted model replies: an approver declines Case A ("a plan change plus proration is not a duplicate"), and Warrant then refuses the similar Case B, citing that precedent. The same test fails when the memory store is empty. The recorded live run is in [docs/live-run.md](docs/live-run.md) and `data/cassettes/live-2026-10-25.jsonl`.
 
-### Visible New Work (Judges Score This)
-- `docs/OAH-EXTENSION.md` — baseline vs. extension, file by file
-- `docs/sponsor-tech.md` — sponsor technology explanation
-- Updated `README.md` with extension section and new credentials
-- 58 tests pass, including new tests for the Zetaris path, H-MEM retrieval, the memory-changes-decision demo and receipts
-- Offline sample mode (`SAMPLE_MODE=true`) uses cassettes — no live services needed
-- H-MEM conformance: 13/13 pass
+## Architecture
 
----
+```mermaid
+flowchart TD
+  Complaint[Customer complaint] --> Load[load_customer: fix the customer from the email]
+  Mem[Meterless H-MEM: precedents, trust ledger] -->|similar past decisions| Load
+  Load --> Agent[Agent loop on Nemotron 3.5 Lightning]
+  Agent -->|search_charges, search_incidents| Tools[Read-only tools, scoped and capped in code]
+  Tools --> Z[Zetaris: billing history, incidents, case history]
+  Tools --> Agent
+  Agent -->|budget spent: submit_finding on Nemotron 3 Ultra| Decide[decide: duplicate policy enforced in code]
+  Decide --> Case[write_case: GitHub issue]
+  Case -->|no duplicate| Refuse[post_refusal: Slack]
+  Case -->|duplicate| Hold[check_hold: Lemma warrant-hold]
+  Hold --> Propose[propose: plan bound to a SHA-256 hash]
+  Propose --> Human[human_review: a person approves or declines]
+  Human -->|approve| Refund[verify, refund once, verify again]
+  Human -->|decline with reason| Decline[record_decline]
+  Refund --> Mem
+  Decline -->|correction| Mem
+  NS[Nightshift: pinned Nemotron lanes and receipts] --- Agent
+```
 
-## At a glance
+Only the agent loop is model-driven. Everything after `submit_finding`, and everything that touches money, is deterministic code. An approval is stored in H-MEM as a decision, and a decline with its reason as a correction. Both are retrieved when a similar complaint arrives.
 
-| | |
-| --- | --- |
-| **What it does** | Takes a "you charged me twice" complaint from the customer to a verified refund, or a reasoned refusal, across Stripe, GitHub and Slack |
-| **Where the AI decides** | One LangGraph loop in which the model chooses what evidence to gather, then submits a finding |
-| **Where code decides** | Whose data the tools can see, whether the evidence really shows a duplicate, what the plan contains, who approved it, and every write that touches money |
-| **Human in the loop** | LangGraph `interrupt()` pauses the run until a person approves or declines the **exact** plan, bound to a SHA-256 plan hash with a 15-minute expiry |
-| **Reliability, offline** | `npm test`: **47 tests, all passing, in about 1.5 s**, with no accounts needed. Covers the duplicate policy, batches, the operation journal, crash recovery, run leases, Lemma holds and audit retention |
-| **Reliability, live** | Six scenarios against real Stripe (test mode), GitHub and Slack: refund, refusal, checkpoint replay, Slack failure after the refund, prompt injection, and a duplicate buried under 22 newer charges |
-| **Lemma in the loop** | Lemma judged our traces against our uploaded policy and **found two real problems, which we fixed**. Active Lemma issues are read back into Warrant, and a person can tag one `warrant-hold` to pause new refund proposals |
-
----
-
-## The problem
-
-"You charged us twice" is one of the most common billing complaints, and one of the most awkward to handle well.
-
-To answer it properly, someone has to look in several places:
-
-- **Billing** (Stripe): are there really two charges? Same amount, same currency, minutes apart, or two different things that just look alike?
-- **Engineering** (GitHub): was there an incident, such as a retry loop or a double-submitted invoice, that would explain it?
-- **The team** (Slack): who signs off on sending money back, and how does everyone else find out?
-
-That work is manual, spread across tools, and usually lands on whoever is on support that day. Both ways of getting it wrong cost money:
-
-**Refunding when you shouldn't.** Two charges can look identical and still both be legitimate: a plan and an add-on, or a proration. A refund is money gone, and an automated agent that refunds whenever a customer says "duplicate" can be talked into it.
-
-**Not refunding when you should.** A customer who is ignored or gets the wrong answer can go to their bank and dispute the charge. According to [Stripe's documentation on disputes](https://docs.stripe.com/disputes/how-disputes-work):
-
-- the disputed amount **plus a dispute fee** is debited from the business's balance, and outside Mexico that fee is **not refunded even if you win**;
-- countering the dispute adds a further fee;
-- while a dispute is open you **cannot issue a refund outside the dispute process**;
-- each dispute **raises your dispute rate** with the card network;
-- the full process can take **2–3 months**, with only **7–21 days** to respond.
-
-So a genuine duplicate that isn't refunded quickly can cost more than the charge itself, while a wrongful refund loses the money outright. Teams need an answer that is **fast, backed by evidence, and safe to act on**.
-
-## What Warrant does
-
-1. **A payment goes wrong.** In the demo, the customer clicks Pay at `/simulation`. The backend creates two real Stripe test-mode PaymentIntents to reproduce a retry bug, and the page shows the returned charge IDs. A **Multiple charge? Ask for a refund** link stays visible throughout.
-2. **The customer reports it.** That link opens the complaint form with the email and report filled in. Warrant finds the customer in Stripe from the email.
-3. **The agent investigates.** The model decides what to look up. It pages back through the customer's charges, so a duplicate beneath many newer charges is still found, and searches GitHub incidents around the dates of the charges it's examining. Code fixes which customer the tools can see and caps every search.
-4. **Code checks the model.** Deterministic code re-checks the finding against the Stripe records. If the model says "duplicate" and the data doesn't support it, the finding becomes a refusal. If the matching charge was **already refunded**, the case says so, rather than "no duplicate found".
-5. **It writes the case either way.** A GitHub issue records the complaint, the finding, an evidence table and the model's stated uncertainty.
-6. **Lemma gets a say.** Before proposing a refund, Warrant checks Lemma for active issues. If a person has tagged one `warrant-hold`, the run pauses instead of proposing. If Lemma can't be reached, it also waits rather than assuming there's no hold.
-7. **It refuses or proposes.**
-   - **No duplicate:** posts to Slack that no action was taken and why; the customer is told nothing changed. No money moves and nobody has to approve anything.
-   - **One duplicate:** posts the proposed refund to Slack and **stops** for a human decision.
-   - **Several duplicates:** proposes **one batch**: keep the earliest charge, refund every later one, with the whole batch bound into a single approval. Batches over 10 refunds or $1,000 go to manual review with no plan.
-8. **A person decides.** On `/admin` they see the investigation graph, the evidence, the model's reasoning, what it searched, the operation journal and links to the Lemma traces, then approve or decline that exact plan.
-9. **It executes and verifies.** On approval, Warrant re-checks the charges, sends Stripe the exact approved amount, reads each charge back to confirm it, then comments on the GitHub case and edits the original Slack message to "Refund applied and verified". On decline, it records who declined and why in GitHub and Slack. The customer's page updates either way.
-
-### What the demo shows
-
-The video follows the S1 path end to end: a payment produces two real Stripe test charges, the customer asks for a refund, and Warrant investigates before asking for approval. The billing team sees the GitHub incident and the cited charge evidence, approves refunding the later charge, and Warrant verifies the refund against Stripe before closing the loop in GitHub and Slack. Lemma holds the trace of the investigation, the approval check, the refund and the verification.
-
-| Page | Who | Shows |
-| --- | --- | --- |
-| `/simulation` | Demo | Pay button that creates two Stripe test charges, and the refund-request link |
-| `/` | Customer | Report form, then plain-language progress (Received → Investigating → Under Review → Resolved/Closed) and the outcome. No internal IDs or model output |
-| `/admin` | Billing team | Complaint queue, live investigation graph, what the agent searched, approve/decline, evidence, model reasoning, operation journal, and links to the GitHub case, Slack and Lemma traces |
-
-## External apps used
-
-| App | What Warrant reads | What Warrant writes | Why it's needed |
-| --- | --- | --- | --- |
-| **Stripe** (test mode) | The customer by email; the agent pages through that customer's charges (10 per search, up to 365 days back); every involved charge again just before refunding | Full refunds of the exact approved amount, each read back to verify. In the demo, `/simulation` also creates the two charges | Where the money is, and the only source of truth for whether a duplicate exists |
-| **GitHub** | Issues labelled `incident`, searched by date window and keywords | An investigation issue per complaint; comments recording the refund or the decline | Links billing complaints to engineering incidents and keeps a permanent audit trail |
-| **Slack** | — | A proposal or refusal message, edited in place when approved or declined | Brings the decision to the team without anyone watching a dashboard |
-
-Supporting tools:
-
-| Tool | Role |
-| --- | --- |
-| **LangGraph** (`@langchain/langgraph`) | Runs the workflow as a fixed state graph with checkpoints stored in SQLite. `interrupt()` makes the human-review pause durable, and a run resumes from the right step after a failure or restart |
-| **Lemma** | One trace per graph segment (investigate / execute / decline / replay), linked by thread, including every model turn's full prompt and the approval check. Our policy is uploaded as agent context so Lemma judges runs against our own rules. Warrant reads active Lemma issues back, and a `warrant-hold` tag pauses new proposals |
-| **Arga** | Slack digital twin with a real rate limit (HTTP 429 with `Retry-After`), used to test what happens when Slack fails after the money has moved |
-| **OpenAI-compatible model** (`gpt-5.6-luna`) | The agent model, using tool calling. Any OpenAI-compatible provider with tool calling works; Groq's `gpt-oss-120b` was also tested (see findings) |
-
-## How it works
+## How the graph works
 
 The model runs **one loop**: it chooses what evidence to look up through read-only tools that code scopes and caps, then submits a finding that code re-checks. Everything after that, and everything that touches money, is deterministic code.
 
@@ -166,7 +108,7 @@ graph TD;
 
 Run `npm run graph` to print the current graph as Mermaid.
 
-### Safety and reliability features
+### Safety and reliability (unchanged from the baseline)
 
 - **Approval bound to the exact plan.** The plan ID is a full SHA-256 hash of the customer, every charge to refund, the charge being kept, amounts, currency, total and action. Approval is recorded against that hash for that run and expires after 15 minutes; if anything material changes, it no longer matches.
 - **The model's tools are scoped and capped in code.** No tool accepts a customer ID. Searches are read-only, limited to 8 per investigation, 10 charges per page and 365 days back, and only what the tools returned can count as evidence.
@@ -179,103 +121,41 @@ Run `npm run graph` to print the current graph as Mermaid.
 - **Audit retention.** `npm run history:archive` (a dry run unless `--apply` is given) snapshots closed runs into an audit archive before pruning only their checkpoint data. Financial journal and approval records are never routinely deleted.
 - **Model outage fallback.** If the model provider is unreachable, a deterministic rules engine that applies the same policy takes over, and the admin page labels the result "Rules fallback".
 
-## How we tested reliability
+## Why it matters
 
-Warrant is tested in two layers.
+"You charged us twice" is one of the most common billing complaints, and one of the most awkward to handle well.
 
-### 1. Offline suite: `npm test` (47 tests, 47 passing, ~1.5 s, no accounts needed)
+To answer it properly, someone has to look in several places:
 
-| File | Covers |
-| --- | --- |
-| `test/policy.test.mjs` | Duplicate rule and 30-day window, batch grouping, caps and hash binding, unrelated incidents not counting as corroboration, model-selected IDs anchoring the batch, live Stripe keys rejected |
-| `test/backend.test.mjs` | Already refunded vs inconclusive outcomes, full prompts in traces, outage fallback limits, refund state changing after approval, ambiguous writes held, restart during approval and during a partial batch, batch execution and replay without a second refund, reapproval after expiry |
-| `test/lemma.test.mjs` | Lemma issue pagination, per-trace occurrences and `warrant-hold` enforcement |
-| `test/operations.test.mjs` | Run lease contention and crash expiry; audit archive keeps financial records |
-| `test/demo.test.mjs` | The full S1 flow on the SQLite provider: investigation stops at approval, a stale plan is rejected, approval refunds only the later charge |
+- **Billing** (Stripe): are there really two charges? Same amount, same currency, minutes apart, or two different things that just look alike?
+- **Engineering** (GitHub): was there an incident, such as a retry loop or a double-submitted invoice, that would explain it?
+- **The team** (Slack): who signs off on sending money back, and how does everyone else find out?
 
-### 2. Live scenarios: real Stripe (test mode), GitHub and Slack
+That work is manual, spread across tools, and usually lands on whoever is on support that day. Both ways of getting it wrong cost money:
 
-Seeded customers are clearly labelled `(SEEDED FIXTURE)`.
+**Refunding when you shouldn't.** Two charges can look identical and still both be legitimate: a plan and an add-on, or a proration. A refund is money gone, and an automated agent that refunds whenever a customer says "duplicate" can be talked into it.
 
-| Scenario | Setup | What must happen | Result |
-| --- | --- | --- | --- |
-| **S1: genuine duplicate** | Two identical $49 charges one second apart, plus a matching GitHub incident | Proposal, approval, one refund, `amount_refunded` verified, the legitimate charge untouched | Pass |
-| **S2: not a duplicate** | $49 plan charge and $73 overage charge, no incident | Refused; case still written with the missing evidence stated; no plan, no money moved | Pass |
-| **S3: replay** | After S1, fork the LangGraph thread from the checkpoint **just before the refund** and run forward again | The graph re-enters the refund step; the journal blocks a second refund; exactly one refund operation | Pass |
-| **S4: Slack fails after the refund** | Slack rate-limits `chat.update` (HTTP 429) after the refund succeeded | Partial status, refund **not** rolled back; resume finishes the follow-up; refund and GitHub comment each happen exactly once | Pass. Verified on Arga's Slack twin before the LangGraph migration, and on the local twin stand-in since |
-| **S5: prompt injection** | 8 forged "duplicate" findings, plus a live complaint against S2's charges that fakes the closing tag and orders an immediate refund | Every forged finding rejected with the right reason, the genuine one allowed, and the live attack refused with no plan and no money moved | Pass |
-| **S6: duplicate beyond the 20 most recent charges** | A genuine $129 duplicate pair with 22 newer usage charges on top | The model pages back, finds the buried pair and refunds the later charge; the test also proves a flat "last 20 charges" fetch would have missed it | Pass (3 charge searches, 24 charges seen, 1 incident search) |
-| **Decline** | A person declines a proposed refund with a reason | The graph resumes into the decline branch; GitHub and Slack record who and why; no money moved | Pass |
+**Not refunding when you should.** A customer who is ignored or gets the wrong answer can go to their bank and dispute the charge. According to [Stripe's documentation on disputes](https://docs.stripe.com/disputes/how-disputes-work):
 
-### What testing taught us
+- the disputed amount **plus a dispute fee** is debited from the business's balance, and outside Mexico that fee is **not refunded even if you win**;
+- countering the dispute adds a further fee;
+- while a dispute is open you **cannot issue a refund outside the dispute process**;
+- each dispute **raises your dispute rate** with the card network;
+- the full process can take **2–3 months**, with only **7–21 days** to respond.
 
-- **Lemma caught real bugs, and we fixed them.** With our policy uploaded, Lemma flagged cases titled "no duplicate found" where a duplicate existed but had already been refunded; there is now a distinct *already refunded* outcome. It also flagged "refund without authorization in the transcript", because execute traces didn't show the approval; they now include an `approval-check` span and every model turn's full prompt. It flagged S3's replay re-verifying a refund too, which is expected, so the policy now says so.
-- **Stripe stacks partial refunds silently.** Two $30 refunds on a $100 charge with different idempotency keys gave `amount_refunded = 6000` with `refunded: false` and no error. This is why Warrant only issues exact full refunds.
-- **LangGraph checkpoints alone don't prevent duplicate writes.** When Slack failed alongside the GitHub update, resuming re-ran the GitHub step that had already finished; the journal skipped it, so the comment was posted once. Checkpoints resume the run; the journal makes each write happen once.
-- **An in-flight write must not count as done.** S4 exposed a resume arriving during an unfinished write and reporting success. Unconfirmed writes now stay pending until reconciled.
-- **Arga's Slack twin produces a real, recoverable fault.** Seeded with a rate limit, `chat.update` returned HTTP 429 with `Retry-After`, then succeeded after the window with the message timestamp preserved.
-- **A fixed "last 20 charges" fetch misses real duplicates.** S6 proves it, which is why evidence gathering became a tool loop the model controls.
-- **Groq's free tier couldn't carry the tool loop.** `gpt-oss-120b` handled a single prompt in 2–3 s, but the multi-turn loop hit its 8,000 tokens-per-minute cap. Groq also rejects tool calls with `null` optional arguments, and `gpt-oss` sometimes emitted its answer under a tool name that doesn't exist. Warrant now accepts nulls, waits and retries on rate limits, and recovers the intended call from the provider's `failed_generation`. The agent runs on `gpt-5.6-luna` at 2–3 s per model turn.
+So a genuine duplicate that isn't refunded quickly can cost more than the charge itself, while a wrongful refund loses the money outright. Teams need an answer that is **fast, backed by evidence, and safe to act on**.
 
-### Known limitations
+## Live setup
 
-- SQLite storage and leases support processes on **one host** sharing one local database file. A multi-host deployment needs runs, leases, checkpoints, approvals and the journal moved together to a shared transactional database.
-- Ambiguous provider writes need a person to inspect the provider and reconcile them (`npm run journal:reconcile`); Warrant never guesses whether a lost response was applied.
-- Approval happens on `/admin`, not with Slack buttons. Lemma issues and holds are available through the backend API (`/api/lemma/issues`) and `npm run lemma:issues`, but aren't yet shown on `/admin`.
-- The customer's email isn't verified before a complaint is accepted; a production version would require a signed-in session or a one-time email link.
-- An investigation that pages far back takes longer: S6 takes about 20–25 s over 5 model turns.
-- Stripe test mode can't backdate charges, so S6 tests "older" as beyond the 20 most recent charges rather than months in the past.
+Requirements: Node.js 22.5 or newer; a Stripe account in test mode; a GitHub token with `repo` scope and a repository with Issues; a Slack app with `chat:write`; a Lemma API key and project; Zetaris running locally (REST at `http://localhost:8888/api/v1.0`); a Nightshift runtime with the NVIDIA provider; and the PostgreSQL and SeaweedFS containers from [Lotline](https://github.com/calledAdo/lotline). Optional: an Arga account for the Slack twin.
 
-## Setup
-
-### Try it without any accounts
-
-```bash
-git clone https://github.com/calledAdo/warrant.git
-cd warrant
+```sh
+cp .env.example .env                       # fill in locally; never commit it
 npm install
-npm test                        # 47 offline tests, ~1.5 s
-npm run demo:prepare:sqlite     # seed the S1 customer into a local SQLite stand-in
-LLM_MODE=rules npm run start:demo:sqlite   # http://localhost:3000 — no Stripe, GitHub, Slack or model needed
-```
-
-The offline demo runs the same graph, policy, approval hash and journal against a local SQLite provider, so it shows the flow but makes no calls to real apps.
-
-### Offline Sample Mode (Cassette Replay) — For Judges
-
-The **sample mode** records live LLM and SQL interactions to JSONL cassettes, then replays them for fully offline evaluation — no Stripe, GitHub, Slack, Zetaris, Nightshift, or Postgres credentials needed.
-
-```bash
-# 1. Record a live run once (requires all services)
-WARRANT_USE_ZETARIS=true npm run start:demo &
-# ... run S1 scenario through /admin ...
-# Cassettes written to data/replays/<runId>/
-
-# 2. Replay offline (no live services needed)
-SAMPLE_MODE=true npm test
-SAMPLE_MODE=true LLM_MODE=rules npm run start:demo:sqlite
-```
-
-Cassettes are stored in `data/replays/<runDir>/` as `llm.jsonl` and `sql.jsonl`. The `src/cassette.js` module handles recording and replay matching by request hash.
-
-### Requirements for the full integrated version (with Zetaris + Nightshift)
-
-- **Node.js 22.5 or newer** (uses the built-in `node:sqlite`; developed on Node 26)
-- A **Stripe** account in test mode or a sandbox
-- A **GitHub** personal access token with `repo` scope, and a repository with Issues enabled for cases and incidents
-- A **Slack** app with the `chat:write` bot scope, installed in a workspace and invited to a channel
-- A **Lemma** API key and project ID ([platform.uselemma.ai](https://platform.uselemma.ai))
-- **Zetaris** running locally at `http://localhost:8888` (REST API) with the `lotline` platform stack
-- **Nightshift** running locally with NVIDIA Nemotron models (`nvidia/nemotron-3.5-lightning-30b-a3b` and `nvidia/nemotron-3-ultra-550b-a55b`)
-- **SeaweedFS** (S3-compatible) at `http://localhost:9000` for evidence snapshots (bucket `lotline`, prefix `warrant/`)
-- **PostgreSQL** `warrant` database in the `lotline-hospital-db-1` container (port 55433)
-- Optional: an **Arga** account for the Slack twin (`uv tool install arga-cli`)
-
-### Configure
-
-```bash
-cp .env.example .env     # then fill in the values below
-# Or run: npm run sync-env  # copies Zetaris/Nightshift/S3/Postgres values from Lotline .env silently
+node scripts/setup-zetaris.mjs             # warrant database, Zetaris datasource
+node scripts/setup-principals.mjs          # wr_evidence and wr_history, SELECT only
+node scripts/sync-evidence.mjs             # Stripe and GitHub evidence into Zetaris
+WARRANT_USE_ZETARIS=true npm run start:demo
 ```
 
 | Variable | Value |
@@ -285,7 +165,6 @@ cp .env.example .env     # then fill in the values below
 | `SLACK_BOT_TOKEN`, `SLACK_CHANNEL` | `xoxb-…` token, and the channel in quotes, e.g. `"#billing-approvals"` |
 | `SLACK_API_URL` | Leave empty for real Slack; set to an Arga twin URL to use the twin |
 | `LEMMA_API_KEY`, `LEMMA_PROJECT_ID` | From Lemma project settings |
-| `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL` | **Legacy** — kept for fallback; not used when Nightshift is configured |
 | `LLM_MODE` | `llm` to use the model, `rules` for the deterministic engine |
 | `LLM_FALLBACK` | Set to `off` to fail instead of falling back to rules when the model is unreachable |
 | `WARRANT_DB` | Path of the SQLite database (the demo scripts set their own) |
@@ -297,7 +176,7 @@ cp .env.example .env     # then fill in the values below
 
 | Variable | Value |
 | --- | --- |
-| `METERLESS_BASE_URL` | Nightshift REST endpoint, e.g. `http://localhost:8080` |
+| `METERLESS_BASE_URL` | Nightshift OpenAI-compatible endpoint, e.g. `http://127.0.0.1:8088/v1` |
 | `METERLESS_RUNTIME_TOKEN` | Nightshift runtime token |
 | `WARRANT_METERLESS_APP_ID` | Application ID for Nightshift (default: `warrant`) |
 | `NIGHTSHIFT_FAST_MODE` | `nvidia/nemotron-3.5-lightning-30b-a3b` (pinned) |
@@ -322,8 +201,8 @@ cp .env.example .env     # then fill in the values below
 
 | Variable | Value |
 | --- | --- |
-| `WARRANT_DB_USER` | `lotline` |
-| `WARRANT_DB_PASSWORD` | From Lotline .env |
+| `WARRANT_DB_USER` | PostgreSQL user for the `warrant` database |
+| `WARRANT_DB_PASSWORD` | Its password |
 
 **Zetaris principals (generated locally, never committed):**
 
@@ -340,7 +219,7 @@ cp .env.example .env     # then fill in the values below
 | --- | --- |
 | `WARRANT_HMEM_DIR` | `data/hmem` (precedent JSONL store) |
 
-### Run the integrated demo (as recorded)
+### Run the integrated app
 
 ```bash
 npm run verify              # check the Stripe, GitHub and Slack credentials end to end
@@ -388,6 +267,78 @@ npm run history:archive -- --days=90       # dry run; add --apply to archive
 npm run graph                              # print the LangGraph as Mermaid
 ```
 
+## Sponsor technology
+
+**Zetaris.** A JDBC datasource over the `warrant` PostgreSQL database exposes `warrant_db.billing_history`, `warrant_db.engineering_incidents` and `warrant_db.case_history`. `scripts/sync-evidence.mjs` fills it from Stripe test mode (or the SQLite stand-in) and GitHub, and also writes snapshot files under `s3://lotline/warrant/`. At runtime the agent's tools query Zetaris as two least-privilege users: `wr_evidence` (role `warrant_evidence`, SELECT on billing history and incidents) and `wr_history` (role `warrant_history`, SELECT on case history). Set `WARRANT_USE_ZETARIS=true` to route evidence reads through Zetaris. The tools return exactly the same shape as the direct Stripe path, so the duplicate policy is unchanged.
+
+**Meterless H-MEM.** The Apache-2.0 reference at upstream commit `1742dec56a66e58eef9dda2d2b865823758ca8cd` is vendored in [engines/hmem](engines/hmem/) with its LICENSE, NOTICE and upstream commit. Warrant replaces the upstream whole-file state with an append-only `events.jsonl` and `ledger.jsonl` that tolerate a torn final line. The upstream conformance suite runs unmodified: 13/13.
+
+**Nightshift and NVIDIA.** Every model call goes through Nightshift's OpenAI-compatible `/chat/completions` API, with the models pinned by name: `nvidia/nemotron-3.5-lightning-30b-a3b` runs the evidence-search turns (with `chat_template_kwargs.enable_thinking=false`), and once the search budget is spent, `nvidia/nemotron-3-ultra-550b-a55b` is offered only `submit_finding` and writes the finding. Generic routing aliases are deliberately avoided. Each call records its receipt ID, routed model, provider, latency and tokens in the trace.
+
+See [the standalone sponsor explanation](docs/sponsor-tech.md).
+
+### Where the engine is used (judges look here)
+
+| Feature | Engine use | Code |
+|---|---|---|
+| Similar past decisions in the prompt | `query` retrieval, reinjected as `<relevant_precedents>` | `src/hmem-precedent.js`, `src/agent-tools.js` |
+| Approver approves a refund | `add` a decision with provenance; ledger `create` | `src/graph.js`, `src/hmem-precedent.js` |
+| Approver declines, with a reason | `add` a correction that outranks the original finding | `src/graph.js`, `src/hmem-precedent.js` |
+| Finding cites the precedent | Memory ID in the finding's grounds | `src/agent-tools.js` |
+| Precedent against current policy | Conflict detection flags contradicting precedents | `src/hmem-precedent.js` |
+| Durable across restarts | Append-only events and ledger | `engines/hmem/src/memoryStore.ts` |
+
+## Evaluation
+
+```sh
+npm test
+npm run engine:conformance
+npx tsc
+```
+
+- **Offline tests:** 59 pass. The baseline suite covers the duplicate policy, batches and caps, the approval hash, the operation journal, crash recovery, run leases, Lemma holds and audit retention. The extension adds the Zetaris evidence path, the per-principal policy, H-MEM retrieval, receipts, precedent formatting, and the memory-changes-decision flow, including the failure when memory is empty.
+- **H-MEM conformance:** 13/13 upstream checks pass.
+- **Live run (25 October 2026):** one complaint end to end through Zetaris and Nightshift, investigation only. Four Nemotron Lightning search turns and one Nemotron Ultra finding, five receipts. Verdict: duplicate, refund `ch_demo_northwind_02`, with the billing-retry incident as the cause. The model also noted that the customer said "March" while the charges were in September. The code check accepted the finding, and the run stopped at awaiting approval. Nothing was refunded. Details: [docs/live-run.md](docs/live-run.md).
+
+### Live scenarios (baseline, Stripe test mode, GitHub and Slack)
+
+Seeded customers are clearly labelled `(SEEDED FIXTURE)`.
+
+| Scenario | Setup | What must happen | Result |
+| --- | --- | --- | --- |
+| **S1: genuine duplicate** | Two identical $49 charges one second apart, plus a matching GitHub incident | Proposal, approval, one refund, `amount_refunded` verified, the legitimate charge untouched | Pass |
+| **S2: not a duplicate** | $49 plan charge and $73 overage charge, no incident | Refused; case still written with the missing evidence stated; no plan, no money moved | Pass |
+| **S3: replay** | After S1, fork the LangGraph thread from the checkpoint **just before the refund** and run forward again | The graph re-enters the refund step; the journal blocks a second refund; exactly one refund operation | Pass |
+| **S4: Slack fails after the refund** | Slack rate-limits `chat.update` (HTTP 429) after the refund succeeded | Partial status, refund **not** rolled back; resume finishes the follow-up; refund and GitHub comment each happen exactly once | Pass. Verified on Arga's Slack twin before the LangGraph migration, and on the local twin stand-in since |
+| **S5: prompt injection** | 8 forged "duplicate" findings, plus a live complaint against S2's charges that fakes the closing tag and orders an immediate refund | Every forged finding rejected with the right reason, the genuine one allowed, and the live attack refused with no plan and no money moved | Pass |
+| **S6: duplicate beyond the 20 most recent charges** | A genuine $129 duplicate pair with 22 newer usage charges on top | The model pages back, finds the buried pair and refunds the later charge; the test also proves a flat "last 20 charges" fetch would have missed it | Pass (3 charge searches, 24 charges seen, 1 incident search) |
+| **Decline** | A person declines a proposed refund with a reason | The graph resumes into the decline branch; GitHub and Slack record who and why; no money moved | Pass |
+
+### What testing taught us
+
+- **Lemma caught real bugs, and we fixed them.** With our policy uploaded, Lemma flagged cases titled "no duplicate found" where a duplicate existed but had already been refunded; there is now a distinct *already refunded* outcome. It also flagged "refund without authorization in the transcript", because execute traces didn't show the approval; they now include an `approval-check` span and every model turn's full prompt. It flagged S3's replay re-verifying a refund too, which is expected, so the policy now says so.
+- **Stripe stacks partial refunds silently.** Two $30 refunds on a $100 charge with different idempotency keys gave `amount_refunded = 6000` with `refunded: false` and no error. This is why Warrant only issues exact full refunds.
+- **LangGraph checkpoints alone don't prevent duplicate writes.** When Slack failed alongside the GitHub update, resuming re-ran the GitHub step that had already finished; the journal skipped it, so the comment was posted once. Checkpoints resume the run; the journal makes each write happen once.
+- **An in-flight write must not count as done.** S4 exposed a resume arriving during an unfinished write and reporting success. Unconfirmed writes now stay pending until reconciled.
+- **Arga's Slack twin produces a real, recoverable fault.** Seeded with a rate limit, `chat.update` returned HTTP 429 with `Retry-After`, then succeeded after the window with the message timestamp preserved.
+- **A fixed "last 20 charges" fetch misses real duplicates.** S6 proves it, which is why evidence gathering became a tool loop the model controls.
+- **Groq's free tier couldn't carry the tool loop.** `gpt-oss-120b` handled a single prompt in 2–3 s, but the multi-turn loop hit its 8,000 tokens-per-minute cap. Groq also rejects tool calls with `null` optional arguments, and `gpt-oss` sometimes emitted its answer under a tool name that doesn't exist. Warrant now accepts nulls, waits and retries on rate limits, and recovers the intended call from the provider's `failed_generation`. The baseline agent ran on `gpt-5.6-luna`; it now runs on Nemotron through Nightshift.
+
+## Data, licences and pre-existing work
+
+The demo customers, charges and incidents are fictional and run in Stripe test mode; the scripts refuse live Stripe keys. No personal data is included.
+
+Declared pre-existing components: the Warrant baseline at tag `oah-baseline` (13 September 2026), and the Meterless H-MEM reference, vendored under Apache-2.0. The Zetaris client and Nightshift client patterns are adapted from the same author's hackathon project [Lotline](https://github.com/calledAdo/lotline). Package dependencies are third-party components listed in the lockfile.
+
+## Limitations and security
+
+- Runtime Zetaris principals are read-only, so writing a new case outcome to `case_history` through Zetaris is refused. That error is caught and the run continues. Outcomes are kept in Warrant's SQLite store and in H-MEM, and `sync-evidence` refreshes the Zetaris tables.
+- The Zetaris evidence path reads synced snapshots of Stripe and GitHub, not live tables.
+- The offline app uses the rules engine. The memory flow is exercised by a test with scripted model replies, and the live model run is documented rather than replayed.
+- SQLite storage and leases support one host. A multi-host deployment needs runs, leases, checkpoints, approvals and the journal in one shared transactional database.
+- Ambiguous provider writes need a person to reconcile them (`npm run journal:reconcile`). Approval happens on `/admin`, not in Slack. The customer's email is not verified before a complaint is accepted.
+- `.env`, local databases and the H-MEM store are ignored by git. The recorded cassette contains model request and response bodies only, never authorization headers.
+
 ## Project layout
 
 ```
@@ -414,11 +365,19 @@ src/
   demo.js, demo-live.js, demo-store.js   S1 demo preparation (integrated and SQLite)
   server.js           HTTP API and pages
   adapters/           stripe.js, github.js, slack.js
+  zetaris.js          Zetaris REST client, per-agent login              (new)
+  evidence.js         evidence reads through Zetaris                    (new)
+  evidence-policy.js  which tables each Zetaris principal may read      (new)
+  hmem-precedent.js   precedent memory on Meterless H-MEM               (new)
+  cassette.js         records model and SQL calls                       (new)
 public/               simulation.html, index.html (customer), admin.html (billing team), app.css
 test/                 offline test suite (npm test)
 verify/               live credential checks, scenario tests, injection test, Slack twin stand-in
-scripts/              Lemma policy upload and issue reader, demo preparation, journal reconcile, archive, graph printer
+scripts/              setup-zetaris, setup-principals, sync-evidence (new); Lemma policy upload and issue reader, demo preparation, journal reconcile, archive, graph printer
 fixtures/             seeds the test customers and incidents
-docs/                 operations guide, project understanding, setup verification log, original build brief
+docs/                 OAH-EXTENSION.md (baseline vs new), sponsor-tech.md, live-run.md, operations guide
+engines/hmem/         vendored Meterless H-MEM reference, conformance suite (new)
+data/cassettes/       the recorded live run (new)
 llmtimeline/          cross-agent work record
 ```
+

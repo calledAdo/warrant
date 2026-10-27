@@ -136,7 +136,7 @@ const SCHEMA = 'Search as much as you need (at most 8 searches), then call submi
 
 export function initialMessages({ report, customer, precedents = [] }) {
   const precedentContext = precedents.length > 0
-    ? ['', '<relevant_precedents>', ...precedents.map((p, i) =>
+    ? ['', '<relevant_precedents>', precedents.map((p, i) =>
         `[${i + 1}] Memory ${p.memory.id} (score: ${p.score.toFixed(2)}): ${p.memory.content} — ${p.relevance}`
       ).join('\n'), '</relevant_precedents>', '']
     : [];

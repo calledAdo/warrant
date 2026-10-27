@@ -8,7 +8,7 @@ const dir=mkdtempSync(join(tmpdir(),'warrant-backend-'));
 process.env.WARRANT_DB=join(dir,'db.sqlite');
 process.env.WARRANT_TEST_PROVIDER=join(dir,'provider.json');
 process.env.WARRANT_HMEM_DIR=join(dir,'hmem');
-process.env.LLM_MODE='rules'; process.env.OPENAI_API_KEY='offline';
+process.env.LLM_MODE='rules'; process.env.METERLESS_RUNTIME_TOKEN='offline';
 process.env.LEMMA_API_KEY=''; process.env.LEMMA_PROJECT_ID='';
 writeFileSync(process.env.WARRANT_TEST_PROVIDER,JSON.stringify({charges:[],calls:[]}));
 const { installMocks, seed, calls, updateCharge, traceRecords, readProvider, writeProvider } = await import('./helpers.mjs');

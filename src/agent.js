@@ -45,7 +45,7 @@ const SCHEMA = `Respond with a single JSON object:
  */
 export async function assembleCase({ report, customer, charges, incidents }) {
   // Explicit rules mode, or no key configured.
-  if (process.env.LLM_MODE === 'rules' || !process.env.OPENAI_API_KEY) {
+  if (process.env.LLM_MODE === 'rules' || (process.env.SAMPLE_MODE !== 'true' && !process.env.METERLESS_RUNTIME_TOKEN)) {
     return rulesResult(charges, incidents);
   }
   const user = [

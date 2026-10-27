@@ -27,7 +27,7 @@
     "journal:reconcile": "node scripts/reconcile-operation.mjs",
     "history:archive": "node scripts/archive-history.mjs",
     "engine:build": "tsc -p engines/hmem/tsconfig.build.json",
-    "engine:conformance": "HMEM_IMPL=/Users/adokiye/hacks/warrant/engines/hmem/src/index.ts tsx engines/hmem/conformance/runner.ts",
+    "engine:conformance": "HMEM_IMPL=$PWD/engines/hmem/src/index.ts tsx engines/hmem/conformance/runner.ts",
     "typecheck": "tsc"
   },
   "dependencies": {

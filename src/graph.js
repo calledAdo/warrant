@@ -113,7 +113,7 @@ async function load_customer(state, config) {
 /** One model turn. The first turn must search; once the cap is hit it must answer. */
 async function agent(state, config) {
   const { run, trace } = ctx(config);
-  if (process.env.LLM_MODE === 'rules' || !process.env.OPENAI_API_KEY) return { llmFailed: 'rules mode' };
+  if (process.env.LLM_MODE === 'rules' || (process.env.SAMPLE_MODE !== 'true' && !process.env.METERLESS_RUNTIME_TOKEN)) return { llmFailed: 'rules mode' };
   const turn = (run.turns = (run.turns || 0) + 1);
   run.step('assemble', 'assess', 'active', turn === 1 ? 'deciding what to look up…' : `turn ${turn} · ${state.toolCalls} searches so far`);
   // Every turn must be a tool call: a search, or submit_finding. Once the
@@ -133,7 +133,7 @@ async function agent(state, config) {
       if (!recovered) throw e;
       console.warn(`  [agent] recovered malformed tool call: ${recovered.tool_calls.map((t) => t.function.name).join(', ')}`);
       trace.recordSpan({ name: 'recovered-tool-call', input: { provider_error: e.body?.error?.code }, output: recovered.tool_calls });
-      out = { message: recovered, model: process.env.OPENAI_MODEL, durationMs: 0, usage: { inputTokens: 0, outputTokens: 0 } };
+      out = { message: recovered, model: 'recovered tool call', durationMs: 0, usage: { inputTokens: 0, outputTokens: 0 } };
     }
     trace.recordGeneration({
       name: `agent-turn-${turn}`,
